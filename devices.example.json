@@ -1,0 +1,37 @@
+[
+  {
+    "name": "AR1",
+    "ip": "192.168.100.11",
+    "username": "admin",
+    "password": "Huawei@123",
+    "device_type": "huawei"
+  },
+  {
+    "name": "AR2",
+    "ip": "192.168.100.12",
+    "username": "admin",
+    "password": "Huawei@123",
+    "device_type": "huawei"
+  },
+  {
+    "name": "AR3",
+    "ip": "192.168.100.13",
+    "username": "admin",
+    "password": "Huawei@123",
+    "device_type": "huawei"
+  },
+  {
+    "name": "AR4",
+    "ip": "192.168.100.14",
+    "username": "admin",
+    "password": "Huawei@123",
+    "device_type": "huawei"
+  },
+  {
+    "name": "LSW1",
+    "ip": "192.168.100.21",
+    "username": "admin",
+    "password": "Huawei@123",
+    "device_type": "huawei"
+  }
+]

@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>eNSP Web 网络设备管理系统</title>
+    <script>
+        (function () {
+            var base = window.location.protocol === "file:" ? "" : "/static/";
+            var version = "?v=20260604-2230";
+            var link = document.createElement("link");
+            link.rel = "stylesheet";
+            link.href = base + "style.css" + version;
+            document.head.appendChild(link);
+        }());
+    </script>
+</head>
+<body>
+
+<!-- ============================================================
+     顶部导航栏
+     ============================================================ -->
+<header class="navbar">
+    <div class="navbar-left">
+        <div class="navbar-brand">
+            <span class="brand-icon">&#x2699;</span>
+            <div>
+                <h1>eNSP 管理系统</h1>
+                <span class="brand-sub">网络设备管理平台</span>
+            </div>
+        </div>
+    </div>
+    <div class="navbar-right">
+        <button class="theme-toggle" id="themeToggle" onclick="toggleTheme()" aria-label="切换主题">
+            <span class="theme-icon-light">&#x2600;</span>
+            <span class="theme-icon-dark">&#x1F319;</span>
+            <span class="theme-icon-system">&#x1F310;</span>
+        </button>
+    </div>
+</header>
+
+<!-- ============================================================
+     主内容区
+     ============================================================ -->
+<main>
+
+    <!-- 区域1：本机网卡信息 -->
+    <section class="card glass" id="section-interfaces">
+        <div class="card-header">
+            <h2><span class="card-icon">&#x1F4E1;</span> 本机网卡信息</h2>
+            <div class="card-actions">
+                <button onclick="loadInterfaces()" class="btn btn-outline" id="btn-refresh-interfaces">
+                    <span class="btn-spinner hidden"></span>
+                    刷新网卡
+                </button>
+            </div>
+        </div>
+        <div class="card-body">
+            <div id="selected-info" class="info-bar" hidden>
+                &#x2714; 当前管理网卡：<strong id="selected-name"></strong>
+                &middot; IP：<strong id="selected-ip"></strong>
+                &middot; 网段：<strong id="selected-subnet"></strong>
+            </div>
+            <div class="table-wrap">
+                <table id="interfaces-table">
+                    <thead>
+                        <tr>
+                            <th>网卡名称</th>
+                            <th>IPv4</th>
+                            <th>子网掩码</th>
+                            <th>MAC</th>
+                            <th>状态</th>
+                            <th>网段</th>
+                            <th>类型</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="interfaces-tbody">
+                        <tr><td colspan="8" class="table-empty">点击"刷新网卡"加载信息</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+
+    <!-- 区域2：设备列表 -->
+    <section class="card glass" id="section-devices">
+        <div class="card-header">
+            <h2><span class="card-icon">&#x1F4CB;</span> 设备列表</h2>
+            <div class="card-actions">
+                <button onclick="loadDevices()" class="btn btn-outline" id="btn-refresh-devices">刷新列表</button>
+                <button onclick="showAddDevice()" class="btn btn-primary">&#x2795; 添加设备</button>
+            </div>
+        </div>
+        <div class="card-body">
+            <!-- 手动添加设备表单 -->
+            <div id="add-device-form" class="form-section" hidden>
+                <div class="form-grid">
+                    <div class="form-row">
+                        <label for="add-name">设备名称：</label>
+                        <input type="text" id="add-name" placeholder="例如 AR3">
+                    </div>
+                    <div class="form-row">
+                        <label for="add-ip">管理 IP：</label>
+                        <input type="text" id="add-ip" placeholder="例如 192.168.100.13">
+                    </div>
+                    <div class="form-row">
+                        <label for="add-username">用户名：</label>
+                        <input type="text" id="add-username" value="admin">
+                    </div>
+                    <div class="form-row">
+                        <label for="add-password">密码：</label>
+                        <input type="password" id="add-password" value="Huawei@123">
+                    </div>
+                    <div class="form-row">
+                        <label for="add-device-type">设备类型：</label>
+                        <select id="add-device-type">
+                            <option value="huawei" selected>huawei</option>
+                            <option value="huawei_vrp">huawei_vrp</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-actions">
+                    <button onclick="addDevice()" class="btn btn-primary" id="btn-add-device-submit">确认添加</button>
+                    <button onclick="hideAddDevice()" class="btn btn-outline">取消</button>
+                </div>
+            </div>
+
+            <div class="table-wrap">
+                <table id="devices-table">
+                    <thead>
+                        <tr>
+                            <th>设备名称</th>
+                            <th>管理 IP</th>
+                            <th>在线状态</th>
+                            <th>SSH 状态</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="devices-tbody">
+                        <tr><td colspan="5" class="table-empty">加载中...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+
+    <!-- 区域4：批量操作 -->
+    <section class="card glass" id="section-batch">
+        <div class="card-header">
+            <h2><span class="card-icon">&#x26A1;</span> 批量操作</h2>
+        </div>
+        <div class="card-body">
+            <div class="btn-group">
+                <button onclick="collectAll()" class="btn btn-primary" id="btn-collect-all">
+                    <span class="btn-spinner hidden"></span>
+                    &#x1F4E1; 采集所有设备
+                </button>
+                <button onclick="loadTopology()" class="btn btn-outline" id="btn-refresh-topology">
+                    &#x1F517; 刷新拓扑
+                </button>
+                <button onclick="loadCollectionResults()" class="btn btn-outline">&#x1F4CA; 刷新采集结果</button>
+            </div>
+            <div id="batch-status" class="info-bar" hidden></div>
+        </div>
+    </section>
+
+    <!-- 区域5：设备信息详情 -->
+    <section class="card glass" id="section-device-info">
+        <div class="card-header">
+            <h2><span class="card-icon">&#x1F4BB;</span> 设备信息详情</h2>
+            <div class="card-actions">
+                <span class="device-count-badge" id="device-count-badge" hidden>0 台设备</span>
+            </div>
+        </div>
+        <div class="card-body">
+            <div id="device-cards">
+                <p class="empty-state">暂无采集数据，请先执行设备采集</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- 区域6：拓扑关系 -->
+    <section class="card glass" id="section-topology">
+        <div class="card-header">
+            <h2><span class="card-icon">&#x1F9F0;</span> LLDP 拓扑关系</h2>
+        </div>
+        <div class="card-body">
+            <div class="table-wrap">
+                <table id="topology-table">
+                    <thead>
+                        <tr>
+                            <th>本端设备</th>
+                            <th>本端 IP</th>
+                            <th>本端接口</th>
+                            <th>对端设备</th>
+                            <th>对端 IP</th>
+                            <th>对端接口</th>
+                        </tr>
+                    </thead>
+                    <tbody id="topology-tbody">
+                        <tr><td colspan="6" class="table-empty">暂无拓扑数据，请先采集设备信息</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+
+</main>
+
+<!-- ============================================================
+     页脚
+     ============================================================ -->
+<footer>
+    <p>eNSP Web 网络设备管理系统 v2.0 &middot; 后端需运行在安装 eNSP 的 Windows 主机上</p>
+</footer>
+
+<script>
+    (function () {
+        var base = window.location.protocol === "file:" ? "" : "/static/";
+        var version = "?v=20260604-2230";
+        var script = document.createElement("script");
+        script.src = base + "app.js" + version;
+        document.body.appendChild(script);
+    }());
+</script>
+</body>
+</html>

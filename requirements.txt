@@ -1,0 +1,6 @@
+fastapi==0.115.0
+uvicorn==0.30.6
+psutil==6.0.0
+netmiko==4.3.0
+ping3==4.0.4
+filelock>=3.13.0
