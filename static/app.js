@@ -25,6 +25,72 @@ window.__ENSP_APP_LOADED__ = true;
 const API_ORIGIN = window.location.protocol === "file:" ? "http://127.0.0.1:8000" : "";
 
 // ============================================================
+// 1.5 侧边栏交互
+// ============================================================
+
+/**
+ * 切换侧边栏折叠/展开状态
+ */
+function toggleSidebar() {
+    const sidebar = document.getElementById("sidebar");
+    if (!sidebar) return;
+    sidebar.classList.toggle("collapsed");
+    // 保存状态到 localStorage
+    localStorage.setItem("ensp-sidebar-collapsed", sidebar.classList.contains("collapsed"));
+}
+
+/**
+ * 切换显示指定的内容区域
+ * @param {string} sectionId - 要显示的 section ID
+ */
+function showSection(sectionId) {
+    // 隐藏所有 section
+    document.querySelectorAll(".section-panel").forEach(section => {
+        section.classList.remove("active");
+    });
+
+    // 显示目标 section
+    const targetSection = document.getElementById(sectionId);
+    if (targetSection) {
+        targetSection.classList.add("active");
+    }
+
+    // 更新菜单项高亮状态
+    document.querySelectorAll(".menu-item").forEach(item => {
+        item.classList.toggle("active", item.dataset.section === sectionId);
+    });
+
+    // 移动端点击后自动关闭侧边栏
+    const sidebar = document.getElementById("sidebar");
+    if (sidebar && window.innerWidth <= 900) {
+        sidebar.classList.remove("mobile-open");
+    }
+}
+
+/**
+ * 初始化侧边栏状态
+ */
+function initSidebar() {
+    const sidebar = document.getElementById("sidebar");
+    if (!sidebar) return;
+
+    // 恢复折叠状态
+    const savedCollapsed = localStorage.getItem("ensp-sidebar-collapsed");
+    if (savedCollapsed === "true") {
+        sidebar.classList.add("collapsed");
+    }
+
+    // 移动端点击遮罩关闭侧边栏
+    document.addEventListener("click", function(e) {
+        if (window.innerWidth <= 900 && sidebar.classList.contains("mobile-open")) {
+            if (!sidebar.contains(e.target) && e.target.id !== "mobileMenuBtn") {
+                sidebar.classList.remove("mobile-open");
+            }
+        }
+    });
+}
+
+// ============================================================
 // 1. 通用工具函数
 // ============================================================
 
@@ -1822,6 +1888,7 @@ async function loadBackupList() {
 // ============================================================
 
 function initApp() {
+    initSidebar();
     loadInterfaces();
     loadDevices();
     loadCollectionResults();

@@ -7,7 +7,7 @@
     <script>
         (function () {
             var base = window.location.protocol === "file:" ? "" : "/static/";
-            var version = "?v=20260605-capability-config";
+            var version = "?v=20260605-sidebar-layout";
             var link = document.createElement("link");
             link.rel = "stylesheet";
             link.href = base + "style.css" + version;
@@ -31,6 +31,9 @@
         </div>
     </div>
     <div class="navbar-right">
+        <button class="mobile-menu-btn" id="mobileMenuBtn" onclick="document.getElementById('sidebar').classList.toggle('mobile-open')" aria-label="打开菜单">
+            <span>&#x2630;</span>
+        </button>
         <button class="theme-toggle" id="themeToggle" onclick="toggleTheme()" aria-label="切换主题">
             <span class="theme-icon-light">&#x2600;</span>
             <span class="theme-icon-dark">&#x1F319;</span>
@@ -40,12 +43,52 @@
 </header>
 
 <!-- ============================================================
-     主内容区
+     主布局（侧边栏 + 内容区）
      ============================================================ -->
-<main>
+<div class="app-layout">
+
+    <!-- 侧边栏 -->
+    <aside class="sidebar" id="sidebar">
+        <nav class="sidebar-menu">
+            <a class="menu-item active" data-section="section-interfaces" onclick="showSection('section-interfaces')">
+                <span class="menu-icon">&#x1F4E1;</span>
+                <span class="menu-text">本机网卡</span>
+            </a>
+            <a class="menu-item" data-section="section-devices" onclick="showSection('section-devices')">
+                <span class="menu-icon">&#x1F4CB;</span>
+                <span class="menu-text">设备列表</span>
+            </a>
+            <a class="menu-item" data-section="section-device-info" onclick="showSection('section-device-info')">
+                <span class="menu-icon">&#x1F4BB;</span>
+                <span class="menu-text">设备详情</span>
+            </a>
+            <a class="menu-item" data-section="section-topology" onclick="showSection('section-topology')">
+                <span class="menu-icon">&#x1F9F0;</span>
+                <span class="menu-text">网络拓扑</span>
+            </a>
+            <a class="menu-item" data-section="section-capabilities" onclick="showSection('section-capabilities')">
+                <span class="menu-icon">&#x1F50D;</span>
+                <span class="menu-text">能力识别</span>
+            </a>
+            <a class="menu-item" data-section="section-config-deploy" onclick="showSection('section-config-deploy')">
+                <span class="menu-icon">&#x2699;</span>
+                <span class="menu-text">配置下发</span>
+            </a>
+            <a class="menu-item" data-section="section-free-workbench" onclick="showSection('section-free-workbench')">
+                <span class="menu-icon">&#x1F6E0;</span>
+                <span class="menu-text">配置工作台</span>
+            </a>
+        </nav>
+        <button class="sidebar-toggle" id="sidebarToggle" onclick="toggleSidebar()" aria-label="折叠侧边栏">
+            <span class="toggle-icon">&#x25C0;</span>
+        </button>
+    </aside>
+
+    <!-- 主内容区 -->
+    <main class="main-content" id="mainContent">
 
     <!-- 区域1：本机网卡信息 -->
-    <section class="card glass" id="section-interfaces">
+    <section class="card glass section-panel active" id="section-interfaces">
         <div class="card-header">
             <h2><span class="card-icon">&#x1F4E1;</span> 本机网卡信息</h2>
             <div class="card-actions">
@@ -84,7 +127,7 @@
     </section>
 
     <!-- 区域2：设备列表 -->
-    <section class="card glass" id="section-devices">
+    <section class="card glass section-panel" id="section-devices">
         <div class="card-header">
             <h2><span class="card-icon">&#x1F4CB;</span> 设备列表</h2>
             <div class="card-actions">
@@ -156,7 +199,7 @@
     </section>
 
     <!-- 区域5：设备信息详情 -->
-    <section class="card glass" id="section-device-info">
+    <section class="card glass section-panel" id="section-device-info">
         <div class="card-header">
             <h2><span class="card-icon">&#x1F4BB;</span> 设备信息详情</h2>
             <div class="card-actions">
@@ -172,7 +215,7 @@
     </section>
 
     <!-- 区域6：拓扑关系 -->
-    <section class="card glass" id="section-topology">
+    <section class="card glass section-panel" id="section-topology">
         <div class="card-header">
             <h2><span class="card-icon">&#x1F9F0;</span> LLDP 拓扑关系</h2>
             <div class="card-actions">
@@ -204,7 +247,7 @@
     </section>
 
     <!-- 区域7：设备能力识别 -->
-    <section class="card glass" id="section-capabilities">
+    <section class="card glass section-panel" id="section-capabilities">
         <div class="card-header">
             <h2><span class="card-icon">&#x1F50D;</span> 设备能力识别</h2>
             <div class="card-actions">
@@ -222,7 +265,7 @@
     </section>
 
     <!-- 区域8：设备配置下发 -->
-    <section class="card glass" id="section-config-deploy">
+    <section class="card glass section-panel" id="section-config-deploy">
         <div class="card-header">
             <h2><span class="card-icon">&#x2699;</span> 设备配置下发</h2>
         </div>
@@ -340,7 +383,7 @@
     </section>
 
 <!-- 区域9：自由配置工作台 -->
-    <section class="card glass" id="section-free-workbench">
+    <section class="card glass section-panel" id="section-free-workbench">
         <div class="card-header">
             <h2><span class="card-icon">&#x1F6E0;</span> 自由配置工作台</h2>
             <div class="card-actions">
@@ -465,6 +508,8 @@ display current-configuration | include sysname"></textarea>
 
 </main>
 
+</div><!-- end .app-layout -->
+
 <!-- ============================================================
      协议配置模态框
      ============================================================ -->
@@ -573,7 +618,7 @@ return"></textarea>
 <script>
     (function () {
         var base = window.location.protocol === "file:" ? "" : "/static/";
-        var version = "?v=20260605-console-diagnostics";
+        var version = "?v=20260605-sidebar-layout";
         var script = document.createElement("script");
         script.src = base + "app.js" + version;
         document.body.appendChild(script);
