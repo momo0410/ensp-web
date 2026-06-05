@@ -7,7 +7,7 @@
     <script>
         (function () {
             var base = window.location.protocol === "file:" ? "" : "/static/";
-            var version = "?v=20260604-2230";
+            var version = "?v=20260605-capability-config";
             var link = document.createElement("link");
             link.rel = "stylesheet";
             link.href = base + "style.css" + version;
@@ -88,13 +88,23 @@
         <div class="card-header">
             <h2><span class="card-icon">&#x1F4CB;</span> 设备列表</h2>
             <div class="card-actions">
+                <button onclick="discoverDevices()" class="btn btn-primary" id="btn-discover-devices">
+                    <span class="btn-spinner hidden"></span>
+                    发现 eNSP 设备
+                </button>
                 <button onclick="loadDevices()" class="btn btn-outline" id="btn-refresh-devices">刷新列表</button>
                 <button onclick="showAddDevice()" class="btn btn-primary">&#x2795; 添加设备</button>
             </div>
         </div>
         <div class="card-body">
+            <div class="discover-bar">
+                <label for="discover-subnet">扫描网段：</label>
+                <input type="text" id="discover-subnet" placeholder="留空使用当前管理网卡网段">
+            </div>
+            <div id="batch-status" class="info-bar" hidden></div>
             <!-- 手动添加设备表单 -->
             <div id="add-device-form" class="form-section" hidden>
+                <div class="form-title" id="device-form-title">添加设备</div>
                 <div class="form-grid">
                     <div class="form-row">
                         <label for="add-name">设备名称：</label>
@@ -121,7 +131,7 @@
                     </div>
                 </div>
                 <div class="form-actions">
-                    <button onclick="addDevice()" class="btn btn-primary" id="btn-add-device-submit">确认添加</button>
+                    <button onclick="saveDeviceForm()" class="btn btn-primary" id="btn-add-device-submit">确认添加</button>
                     <button onclick="hideAddDevice()" class="btn btn-outline">取消</button>
                 </div>
             </div>
@@ -145,32 +155,13 @@
         </div>
     </section>
 
-    <!-- 区域4：批量操作 -->
-    <section class="card glass" id="section-batch">
-        <div class="card-header">
-            <h2><span class="card-icon">&#x26A1;</span> 批量操作</h2>
-        </div>
-        <div class="card-body">
-            <div class="btn-group">
-                <button onclick="collectAll()" class="btn btn-primary" id="btn-collect-all">
-                    <span class="btn-spinner hidden"></span>
-                    &#x1F4E1; 采集所有设备
-                </button>
-                <button onclick="loadTopology()" class="btn btn-outline" id="btn-refresh-topology">
-                    &#x1F517; 刷新拓扑
-                </button>
-                <button onclick="loadCollectionResults()" class="btn btn-outline">&#x1F4CA; 刷新采集结果</button>
-            </div>
-            <div id="batch-status" class="info-bar" hidden></div>
-        </div>
-    </section>
-
     <!-- 区域5：设备信息详情 -->
     <section class="card glass" id="section-device-info">
         <div class="card-header">
             <h2><span class="card-icon">&#x1F4BB;</span> 设备信息详情</h2>
             <div class="card-actions">
                 <span class="device-count-badge" id="device-count-badge" hidden>0 台设备</span>
+                <button onclick="loadCollectionResults()" class="btn btn-outline btn-sm">&#x1F4CA; 刷新采集数据</button>
             </div>
         </div>
         <div class="card-body">
@@ -184,6 +175,12 @@
     <section class="card glass" id="section-topology">
         <div class="card-header">
             <h2><span class="card-icon">&#x1F9F0;</span> LLDP 拓扑关系</h2>
+            <div class="card-actions">
+                <button onclick="loadTopology()" class="btn btn-outline btn-sm" id="btn-refresh-topology">
+                    <span class="btn-spinner hidden"></span>
+                    &#x1F517; 刷新拓扑
+                </button>
+            </div>
         </div>
         <div class="card-body">
             <div class="table-wrap">
@@ -206,19 +203,377 @@
         </div>
     </section>
 
+    <!-- 区域7：设备能力识别 -->
+    <section class="card glass" id="section-capabilities">
+        <div class="card-header">
+            <h2><span class="card-icon">&#x1F50D;</span> 设备能力识别</h2>
+            <div class="card-actions">
+                <button onclick="probeAllCapabilities()" class="btn btn-primary" id="btn-probe-all">
+                    <span class="btn-spinner hidden"></span>
+                    &#x1F50D; 识别所有设备能力
+                </button>
+            </div>
+        </div>
+        <div class="card-body">
+            <div id="capability-results">
+                <p class="empty-state">暂无能力识别数据，请点击"识别所有设备能力"</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- 区域8：设备配置下发 -->
+    <section class="card glass" id="section-config-deploy">
+        <div class="card-header">
+            <h2><span class="card-icon">&#x2699;</span> 设备配置下发</h2>
+        </div>
+        <div class="card-body">
+            <!-- 设备选择 -->
+            <div class="config-device-select">
+                <label for="config-device-select">选择设备：</label>
+                <select id="config-device-select" onchange="onConfigDeviceSelected()">
+                    <option value="">-- 请先选择设备 --</option>
+                </select>
+                <button onclick="loadBackupList()" class="btn btn-sm btn-outline" id="btn-view-backups">
+                    &#x1F4C1; 查看备份
+                </button>
+            </div>
+
+            <!-- 配置模板选择 -->
+            <div id="config-templates-area" class="hidden">
+                <div class="config-templates-grid" id="config-templates-grid">
+                    <!-- 动态生成 -->
+                </div>
+            </div>
+
+            <!-- 配置表单 -->
+            <div id="config-form-area" class="hidden">
+                <div class="form-section">
+                    <div class="form-title" id="config-form-title">配置表单</div>
+                    <div class="form-grid" id="config-form-fields">
+                        <!-- 动态生成 -->
+                    </div>
+                    <div class="form-actions">
+                        <button onclick="previewConfig()" class="btn btn-outline" id="btn-preview-config">
+                            &#x1F441; 生成配置预览
+                        </button>
+                        <button onclick="deployConfig()" class="btn btn-primary" id="btn-deploy-config">
+                            <span class="btn-spinner hidden"></span>
+                            &#x1F680; 确认下发
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 配置预览区域 -->
+            <div id="config-preview-area" class="hidden">
+                <div class="config-sections">
+                    <div class="config-sections-title" onclick="toggleConfigSections(this)">
+                        <span class="config-sections-arrow">&#9660;</span>
+                        <span>配置命令预览</span>
+                    </div>
+                    <div class="config-sections-body open">
+                        <pre class="config-block-pre" id="config-preview-content"></pre>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 配置结果区域 -->
+            <div id="config-result-area" class="hidden">
+                <div class="config-sections">
+                    <div class="config-sections-title" onclick="toggleConfigSections(this)">
+                        <span class="config-sections-arrow">&#9660;</span>
+                        <span>下发结果</span>
+                    </div>
+                    <div class="config-sections-body open">
+                        <div id="config-result-content" class="config-result-body"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 高级命令模式 -->
+            <div class="advanced-mode-section">
+                <details>
+                    <summary class="advanced-mode-summary">
+                        <span class="card-icon">&#x26A0;</span> 高级命令模式（危险）
+                    </summary>
+                    <div class="advanced-mode-body">
+                        <div class="info-bar error">
+                            &#x26A0; 警告：高级命令模式将直接下发原始命令到设备，可能导致配置异常。下发前系统将自动备份当前配置。
+                        </div>
+                        <textarea id="raw-commands" class="command-editor" rows="8"
+                            placeholder="每行一条命令，例如：&#10;system-view&#10;interface GigabitEthernet0/0/0&#10;ip address 10.0.0.1 255.255.255.0&#10;return"></textarea>
+                        <div class="form-actions">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="raw-save-config"> 下发后保存配置
+                            </label>
+                            <button onclick="previewRawCommands()" class="btn btn-outline">
+                                &#x1F441; 预览
+                            </button>
+                            <button onclick="deployRawCommands()" class="btn btn-danger" id="btn-deploy-raw">
+                                <span class="btn-spinner hidden"></span>
+                                &#x1F680; 确认下发（危险）
+                            </button>
+                        </div>
+                        <div id="raw-preview-area" class="hidden">
+                            <pre class="config-block-pre" id="raw-preview-content"></pre>
+                        </div>
+                        <div id="raw-result-area" class="hidden">
+                            <div id="raw-result-content" class="config-result-body"></div>
+                        </div>
+                    </div>
+                </details>
+            </div>
+
+            <!-- 备份列表 -->
+            <div id="backup-list-area" class="hidden">
+                <div class="config-sections">
+                    <div class="config-sections-title" onclick="toggleConfigSections(this)">
+                        <span class="config-sections-arrow">&#9660;</span>
+                        <span>备份文件列表</span>
+                    </div>
+                    <div class="config-sections-body open">
+                        <div id="backup-list-content" class="backup-list-body"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+<!-- 区域9：自由配置工作台 -->
+    <section class="card glass" id="section-free-workbench">
+        <div class="card-header">
+            <h2><span class="card-icon">&#x1F6E0;</span> 自由配置工作台</h2>
+            <div class="card-actions">
+                <button class="btn btn-sm btn-outline" onclick="loadScriptList()">
+                    <span class="btn-spinner hidden"></span>
+                    &#x1F4C1; 加载脚本
+                </button>
+                <button class="btn btn-sm btn-outline" onclick="loadTaskHistory()">
+                    <span class="btn-spinner hidden"></span>
+                    &#x1F4CB; 历史记录
+                </button>
+            </div>
+        </div>
+        <div class="card-body">
+            <!-- 任务名称 -->
+            <div class="workbench-row">
+                <div class="workbench-field">
+                    <label>任务名称</label>
+                    <input type="text" id="wb-task-name" class="protocol-input" placeholder="例如：批量配置管理地址">
+                </div>
+            </div>
+
+            <!-- 目标设备选择 -->
+            <div class="workbench-section">
+                <div class="workbench-section-title">目标设备（多选）</div>
+                <div id="wb-device-select" class="wb-device-checkboxes">
+                    <p class="empty-hint">请先加载设备列表</p>
+                </div>
+            </div>
+
+            <!-- 命令模板 -->
+            <div class="workbench-section">
+                <div class="workbench-section-title">
+                    命令模板
+                    <span class="workbench-hint">支持 {{变量名}} 语法，# 开头为注释，空行自动跳过</span>
+                </div>
+                <textarea id="wb-commands" class="command-editor wb-editor" rows="14" placeholder="interface {{interface}}
+ip address {{ip_address}} {{subnet_mask}}
+quit
+
+# 开启 LLDP
+lldp enable"></textarea>
+            </div>
+
+            <!-- 变量编辑 -->
+            <div class="workbench-vars">
+                <div class="workbench-var-panel">
+                    <div class="workbench-section-title">全局变量 (JSON)</div>
+                    <textarea id="wb-global-vars" class="var-editor" rows="6" placeholder='{"subnet_mask": "255.255.255.0"}'>{}</textarea>
+                </div>
+                <div class="workbench-var-panel">
+                    <div class="workbench-section-title">单设备变量 (JSON)</div>
+                    <textarea id="wb-device-vars" class="var-editor" rows="6" placeholder='{"192.168.56.11": {"hostname": "AR1", "ip_address": "192.168.56.11"}}'>{}</textarea>
+                </div>
+            </div>
+
+            <!-- 验证命令 -->
+            <div class="workbench-section">
+                <div class="workbench-section-title">验证命令</div>
+                <textarea id="wb-verify-commands" class="command-editor wb-verify-editor" rows="4" placeholder="display ip interface brief
+display current-configuration | include sysname"></textarea>
+            </div>
+
+            <!-- 选项 -->
+            <div class="workbench-options">
+                <label class="wb-checkbox-label">
+                    <input type="checkbox" id="wb-stop-on-error" checked class="protocol-checkbox">
+                    某台设备失败时停止该设备后续操作
+                </label>
+                <label class="wb-checkbox-label">
+                    <input type="checkbox" id="wb-save-after" class="protocol-checkbox">
+                    下发成功后保存配置
+                </label>
+            </div>
+
+            <!-- 操作按钮 -->
+            <div class="workbench-actions">
+                <button class="btn btn-primary" id="btn-wb-preview" onclick="workbenchPreview()">
+                    <span class="btn-spinner hidden"></span>
+                    &#x1F441; 生成预览
+                </button>
+                <button class="btn btn-success" id="btn-wb-deploy" onclick="workbenchDeploy()">
+                    <span class="btn-spinner hidden"></span>
+                    &#x1F680; 确认下发
+                </button>
+                <button class="btn btn-outline" id="btn-wb-save-script" onclick="workbenchSaveScript()">
+                    &#x1F4BE; 保存为脚本
+                </button>
+            </div>
+
+            <!-- 预览结果 -->
+            <div id="wb-preview-area" class="hidden">
+                <div class="workbench-result-title">配置预览</div>
+                <div id="wb-preview-content" class="wb-preview-content"></div>
+            </div>
+
+            <!-- 执行结果 -->
+            <div id="wb-result-area" class="hidden">
+                <div class="workbench-result-title">执行结果</div>
+                <div id="wb-result-content" class="wb-result-content"></div>
+            </div>
+
+            <!-- 脚本列表面板 -->
+            <div id="wb-scripts-panel" class="hidden">
+                <div class="workbench-result-title">
+                    脚本列表
+                    <button class="btn btn-sm btn-outline" onclick="document.getElementById('wb-scripts-panel').classList.add('hidden')">关闭</button>
+                </div>
+                <div id="wb-scripts-list" class="wb-scripts-list"></div>
+            </div>
+
+            <!-- 历史记录面板 -->
+            <div id="wb-tasks-panel" class="hidden">
+                <div class="workbench-result-title">
+                    历史记录
+                    <button class="btn btn-sm btn-outline" onclick="document.getElementById('wb-tasks-panel').classList.add('hidden')">关闭</button>
+                </div>
+                <div id="wb-tasks-list" class="wb-tasks-list"></div>
+            </div>
+        </div>
+    </section>
+
 </main>
+
+<!-- ============================================================
+     协议配置模态框
+     ============================================================ -->
+<div id="protocol-config-modal" class="modal hidden">
+    <div class="modal-overlay" onclick="closeProtocolConfig()"></div>
+    <div class="modal-content modal-large">
+        <div class="modal-header">
+            <h3><span class="card-icon">&#x1F6E0;</span> 设备协议配置 - <span id="protocol-device-name">-</span></h3>
+            <button class="modal-close" onclick="closeProtocolConfig()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <!-- 已检测到的协议状态 -->
+            <div class="protocol-status-bar">
+                <span class="protocol-status-label">已检测到的协议：</span>
+                <span id="detected-protocols" class="protocol-status-list">-</span>
+            </div>
+
+            <!-- 协议选择标签页 -->
+            <div class="protocol-tabs" id="protocol-tabs">
+                <!-- 动态生成 -->
+            </div>
+
+            <!-- 配置模式切换 -->
+            <div class="config-mode-switch">
+                <button class="config-mode-btn active" data-mode="form" onclick="switchConfigMode('form')">
+                    <span class="mode-icon">&#x1F4CB;</span> 表单配置
+                </button>
+                <button class="config-mode-btn" data-mode="command" onclick="switchConfigMode('command')">
+                    <span class="mode-icon">&#x1F4BB;</span> 命令行配置
+                </button>
+            </div>
+
+            <!-- 表单配置区域 -->
+            <div id="protocol-form-config" class="protocol-config-area">
+                <div class="protocol-form-placeholder">
+                    <p>请在上方选择要配置的协议</p>
+                </div>
+            </div>
+
+            <!-- 命令行配置区域 -->
+            <div id="protocol-command-config" class="protocol-config-area hidden">
+                <div class="command-editor-header">
+                    <span>输入配置命令（每行一条）</span>
+                    <button class="btn btn-sm btn-outline" onclick="clearCommandEditor()">清空</button>
+                </div>
+                <textarea id="protocol-commands" class="command-editor" rows="12" placeholder="例如：
+system-view
+ospf 1
+area 0.0.0.0
+network 192.168.1.0 0.0.0.255
+return"></textarea>
+            </div>
+
+            <!-- 当前配置预览 -->
+            <div id="current-config-preview" class="config-preview hidden">
+                <div class="config-preview-header">
+                    <span class="config-preview-arrow">&#9654;</span>
+                    <span>当前配置</span>
+                </div>
+                <pre class="config-preview-content"></pre>
+            </div>
+
+            <!-- 操作按钮 -->
+            <div class="modal-actions">
+                <button class="btn btn-primary" id="btn-apply-protocol" onclick="applyProtocolConfig()">
+                    <span class="btn-spinner hidden"></span>
+                    应用配置到设备
+                </button>
+                <button class="btn btn-danger" id="btn-delete-protocol" onclick="deleteProtocolConfig()">
+                    <span class="btn-spinner hidden"></span>
+                    删除此协议配置
+                </button>
+                <button class="btn btn-outline" onclick="closeProtocolConfig()">关闭</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ============================================================
+     确认对话框
+     ============================================================ -->
+<div id="custom-modal" class="modal hidden">
+    <div class="modal-overlay"></div>
+    <div class="modal-content modal-small">
+        <div class="modal-header">
+            <h3 id="modal-title">确认</h3>
+            <button class="modal-close" onclick="document.getElementById('custom-modal').classList.add('hidden')">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p id="modal-message"></p>
+        </div>
+        <div class="modal-actions">
+            <button class="btn btn-primary" id="modal-ok">确定</button>
+            <button class="btn btn-outline" id="modal-cancel">取消</button>
+        </div>
+    </div>
+</div>
 
 <!-- ============================================================
      页脚
      ============================================================ -->
 <footer>
-    <p>eNSP Web 网络设备管理系统 v2.0 &middot; 后端需运行在安装 eNSP 的 Windows 主机上</p>
+    <p>eNSP Web 网络设备管理系统 v3.0 &middot; 后端需运行在安装 eNSP 的 Windows 主机上</p>
 </footer>
 
 <script>
     (function () {
         var base = window.location.protocol === "file:" ? "" : "/static/";
-        var version = "?v=20260604-2230";
+        var version = "?v=20260605-console-diagnostics";
         var script = document.createElement("script");
         script.src = base + "app.js" + version;
         document.body.appendChild(script);

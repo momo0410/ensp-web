@@ -1,0 +1,12 @@
+{
+  "script_name": "批量开启 LLDP",
+  "description": "在多台设备上批量开启 LLDP 协议，用于拓扑发现",
+  "command_template": "lldp enable",
+  "global_vars": {},
+  "sample_device_vars": {},
+  "verify_commands": [
+    "display lldp neighbor brief"
+  ],
+  "created_at": "2026-06-05 20:00:00",
+  "updated_at": "2026-06-05 20:00:00"
+}

@@ -1,0 +1,17 @@
+{
+  "script_name": "批量配置SSH",
+  "description": "批量配置 SSH 用户、启用 STelnet 服务器、设置 VTY 认证",
+  "command_template": "aaa\nlocal-user {{username}} password cipher {{password}}\nlocal-user {{username}} privilege level {{privilege_level}}\nlocal-user {{username}} service-type ssh\nquit\nstelnet server enable\nssh user {{username}} authentication-type password\nuser-interface vty 0 4\nauthentication-mode aaa\nprotocol inbound ssh\nquit",
+  "global_vars": {
+    "username": "admin",
+    "password": "Huawei@123",
+    "privilege_level": "15"
+  },
+  "sample_device_vars": {},
+  "verify_commands": [
+    "display current-configuration | include ssh",
+    "display ssh server status"
+  ],
+  "created_at": "2026-06-05 20:00:00",
+  "updated_at": "2026-06-05 20:00:00"
+}
