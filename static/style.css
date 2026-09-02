@@ -3931,3 +3931,31 @@ body {
 .ai-settings-form label { font-size: 12px; font-weight: 600; margin-top: 8px; }
 .ai-settings-actions { display: flex; gap: 8px; margin-top: 14px; }
 .ai-privacy { font-size: 11.5px; color: var(--text-muted, #888); margin-top: 14px; line-height: 1.6; }
+
+/* 设备侧 ping 工具 */
+.ai-ping-tool {
+    padding: 11px 13px;
+    border: 1px solid rgba(108, 92, 231, 0.35);
+    border-radius: 10px;
+    margin-bottom: 12px;
+}
+.ai-ping-row { display: flex; align-items: center; gap: 6px; margin: 8px 0; }
+.ai-ping-row select { flex: 1; min-width: 0; }
+.ai-ping-arrow { color: var(--text-muted, #888); }
+.ai-ping-result {
+    font-size: 12px;
+    line-height: 1.6;
+    margin: 6px 0;
+    word-break: break-all;
+}
+.ai-ping-result pre {
+    margin: 6px 0 0;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: #1e2230;
+    color: #d8e0f0;
+    font-size: 11px;
+    max-height: 160px;
+    overflow-y: auto;
+    white-space: pre;
+}

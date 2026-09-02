@@ -3947,6 +3947,7 @@ function toggleAIDrawer(open) {
         drawer.classList.add("open");
         backdrop.classList.remove("hidden");
         updateAIDeviceSelect();
+        updateAIPingSelects();
         loadAIStatus();
         if (!aiLabExperiments.length) loadLabExperiments();
         setTimeout(() => { const el = document.getElementById("ai-chat-input"); if (el) el.focus(); }, 250);
@@ -4194,6 +4195,79 @@ function aiQuickTask(task) {
         return;
     }
     sendAIChat(task, AI_QUICK_TASKS[task]);
+}
+
+// ---------- 设备侧 ping 连通性验证 ----------
+let _aiLastPing = null;
+
+function updateAIPingSelects() {
+    const source = document.getElementById("ai-ping-source");
+    const target = document.getElementById("ai-ping-target");
+    if (!source || !target) return;
+    const prevS = source.value, prevT = target.value;
+    source.innerHTML = '<option value="">-- 源设备 --</option>';
+    target.innerHTML = '<option value="">-- 目标 IP --</option>';
+    for (const d of currentDevices) {
+        source.innerHTML += `<option value="${escapeHtml(d.ip)}">${escapeHtml(d.name)} (${escapeHtml(d.ip)})</option>`;
+        target.innerHTML += `<option value="${escapeHtml(d.ip)}">${escapeHtml(d.ip)}</option>`;
+    }
+    if (prevS) source.value = prevS;
+    if (prevT) target.value = prevT;
+}
+
+async function runDevicePing() {
+    const src = document.getElementById("ai-ping-source").value;
+    const dst = document.getElementById("ai-ping-target").value;
+    const resultEl = document.getElementById("ai-ping-result");
+    const askBtn = document.getElementById("ai-ping-ask");
+    if (!src || !dst) {
+        resultEl.innerHTML = '<span class="cap-badge unsupported">请先选择源设备和目标 IP</span>';
+        return;
+    }
+    const runBtn = document.getElementById("ai-ping-run");
+    runBtn.disabled = true;
+    resultEl.innerHTML = '正在从 ' + escapeHtml(src) + ' ping ' + escapeHtml(dst) + ' …（约 5-10 秒）';
+    try {
+        const data = await api(`/api/devices/${encodeURIComponent(src)}/device-ping`, {
+            method: "POST",
+            body: JSON.stringify({ target: dst, count: 4 }),
+        });
+        _aiLastPing = data;
+        const loss = data.loss_rate != null ? data.loss_rate + "%" : "?";
+        const avg = data.avg_ms != null ? data.avg_ms + "ms" : "?";
+        resultEl.innerHTML =
+            (data.success
+                ? '<span class="cap-badge configured">连通</span>'
+                : '<span class="cap-badge unsupported">不通</span>')
+            + ` 丢包 ${loss} · 平均 ${avg}`
+            + (data.error ? ` · ${escapeHtml(data.error)}` : "")
+            + `<pre>${escapeHtml(data.raw_output || "")}</pre>`;
+        askBtn.classList.remove("hidden");
+    } catch (e) {
+        resultEl.innerHTML = `<span class="cap-badge unsupported">失败</span> ${escapeHtml(e.message)}`;
+        askBtn.classList.add("hidden");
+    } finally {
+        runBtn.disabled = false;
+    }
+}
+
+function pingResultToTutor() {
+    if (!_aiLastPing) return;
+    const src = document.getElementById("ai-ping-source")?.value || "";
+    const p = _aiLastPing;
+    const summary = `我刚在设备 ${src} 上执行了 \`${p.command}\`：`
+        + ` 发包 ${p.transmitted}，收包 ${p.received}，`
+        + `丢包率 ${p.loss_rate != null ? p.loss_rate + "%" : "未知"}，`
+        + `平均时延 ${p.avg_ms != null ? p.avg_ms + "ms" : "未知"}。`
+        + (p.success ? "结果是通的。" : "结果不通。")
+        + "请结合我的实验目标分析这个结果说明了什么"
+        + (p.success ? "" : "，并提示我可能的排查方向");
+    if (aiLabSession) {
+        document.getElementById("ai-lab-hint-input").value = summary;
+        askLabHint();
+    } else {
+        sendAIChat("diagnose", summary);
+    }
 }
 
 // ---------- 实验指导（三期） ----------

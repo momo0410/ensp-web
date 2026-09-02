@@ -951,6 +951,19 @@ return"></textarea>
         <div id="ai-lab-list">
             <p class="empty-state">正在加载实验目录…</p>
         </div>
+        <div class="ai-ping-tool">
+            <div class="ai-lab-card-head">
+                <strong>连通性验证（设备侧 ping）</strong>
+            </div>
+            <div class="ai-ping-row">
+                <select id="ai-ping-source"></select>
+                <span class="ai-ping-arrow">&rarr;</span>
+                <select id="ai-ping-target"></select>
+                <button class="btn btn-sm btn-primary" id="ai-ping-run" onclick="runDevicePing()">测试</button>
+            </div>
+            <div id="ai-ping-result" class="ai-ping-result"></div>
+            <button id="ai-ping-ask" class="btn btn-sm btn-outline hidden" onclick="pingResultToTutor()">&#129302; 把结果告诉助教分析</button>
+        </div>
         <div id="ai-lab-active" class="hidden">
             <div class="ai-lab-head">
                 <div>

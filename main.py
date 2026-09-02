@@ -44,6 +44,7 @@ from services.role_detector import detect_protocol_roles
 from services import ai_assistant
 from services.ai_assistant import AIError
 from services.access_guard import access_guard, ACCESS_ENABLED, ACCESS_TOKEN
+from services.live_check import ping_from_device
 from services.config_builder import (
     build_preview,
     build_config_commands,
@@ -3018,6 +3019,31 @@ async def get_capability_templates(device_role: Optional[str] = None):
     else:
         templates = get_all_templates()
     return {"success": True, "templates": templates}
+
+
+class DevicePingRequest(BaseModel):
+    target: str
+    count: int = 4
+    source: Optional[str] = None   # 源地址（VRP ping -a），路由实验常用
+
+
+@app.post("/api/devices/{ip}/device-ping")
+async def device_ping(ip: str, req: DevicePingRequest):
+    """
+    在指定设备上执行 ping（数据面验证）。
+
+    管理面的能力/角色/配置只能说明"配了没有"，学生实验的最终验收
+    （如跨网段互通）需要在设备上真实 ping 一发。
+    """
+    device = next((d for d in load_devices() if d["ip"] == ip), None)
+    if not device:
+        raise HTTPException(status_code=404, detail=f"未找到 IP 为 {ip} 的设备")
+    result = ping_from_device(
+        device, req.target, count=req.count, source=req.source,
+        source_bind=_management_source_ip_for(ip),
+        management_socket_factory=_create_management_socket,
+    )
+    return result
 
 
 @app.get("/api/devices/{ip}/protocol-roles")
