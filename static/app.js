@@ -4009,6 +4009,7 @@ function onAIDeviceChanged() { /* 切换设备时上下文由后端按 ip 重新
 async function loadAIStatus() {
     try {
         const data = await api("/api/ai/status");
+        window._aiConfigured = !!data.configured;
         const badge = document.getElementById("ai-mode-badge");
         badge.textContent = data.mode === "engineer" ? "工程师模式" : "助教模式";
         badge.classList.toggle("running", data.mode === "engineer");
@@ -4206,12 +4207,114 @@ async function _aiStreamRequest(url, body, msgEl, _retried = false) {
     return reply;
 }
 
+// ---------- 无 Key 本地降级（确定性解读，不依赖模型服务） ----------
+function _localFallback(task, ip) {
+    const builders = {
+        explain_capabilities: _localExplainCapabilities,
+        explain_roles: _localExplainRoles,
+        explain_config: _localExplainConfig,
+        diagnose: _localDiagnose,
+    };
+    const fn = builders[task];
+    if (!fn) return false;
+    const text = fn(ip);
+    if (!text) return false;
+    aiPushMsg("user", AI_QUICK_TASKS[task] || task);
+    aiPushMsg("assistant", text
+        + "\n\n> 以上为**本地确定性解读**（未接入 AI 服务）。在\"设置\"里填入 API 地址 / Key / 模型名后，可获得更深入的讲解。");
+    aiHistory.push({ role: "assistant", content: text });
+    _saveAIHistory();
+    return true;
+}
+
+function _localCapText(ip) {
+    const cap = capabilityResults[ip];
+    if (!cap) return "";
+    const buckets = { running: [], configured: [], supported: [], unsupported: [] };
+    for (const [key, c] of Object.entries(cap.capabilities || {})) {
+        const state = c.running ? "running" : c.configured ? "configured"
+            : c.supported ? "supported" : "unsupported";
+        buckets[state].push((CAPABILITY_NAMES[key] || key)
+            + (state === "unsupported" && c.note ? `（${c.note}）` : ""));
+    }
+    const m = cap.matrix || {};
+    const label = { running: "运行中", configured: "已配置",
+                    supported: "支持未配置", unsupported: "不支持" };
+    const lines = [`**${cap.hostname || ip}**（${ip}）${cap.model || ""} ${m.image || ""}`];
+    if (m.family) lines.push(`镜像矩阵: ${m.family_label || m.family}（置信 ${m.confidence || "?"}）`);
+    for (const state of ["running", "configured", "supported", "unsupported"]) {
+        if (buckets[state].length)
+            lines.push(`- **${label[state]}**(${buckets[state].length}): ${buckets[state].join("、")}`);
+    }
+    lines.push("\n状态含义: 运行中 = 已配置且检测到邻居/表项；已配置 = 配置里出现关键字；支持 = 命令探测通过。");
+    return lines.join("\n");
+}
+
+function _localExplainCapabilities(ip) {
+    const text = _localCapText(ip);
+    return text ? text
+        + "\n\n为什么有不支持的？eNSP 镜像功能是真实 VRP 的子集（S5700 是 V200R001、AR 是 V200R003），矩阵判定与 ? 命令树实测一致时最可信。" : "";
+}
+
+function _localExplainRoles(ip) {
+    const roles = (protocolRoleResults[ip] || {}).protocols || {};
+    const lines = [`**${protocolRoleResults[ip]?.hostname || ip} 的协议角色**`];
+    let any = false;
+    for (const p of Object.values(roles)) {
+        if (!p.roles?.length) continue;
+        any = true;
+        const chips = p.roles.map(r =>
+            `${r.role}` + (r.detail ? `（${r.detail}）` : "") + (r.interface ? ` @${r.interface}` : ""));
+        lines.push(`- **${p.name}**: ${chips.join("；")}`);
+    }
+    if (!any) lines.push("- 暂未发现已配置的协议角色，请先完成配置或重新识别能力。");
+    return lines.join("\n");
+}
+
+function _localExplainConfig(ip) {
+    const cap = capabilityResults[ip];
+    if (!cap) return "";
+    const intfs = cap.interfaces || [];
+    const withIp = intfs.filter(i => i.ip).length;
+    const lines = [`**${cap.hostname || ip} 配置摘要**`];
+    lines.push(`- 接口 ${intfs.length} 个（配 IP ${withIp} 个）`);
+    const capText = _localCapText(ip);
+    if (capText) lines.push("- 协议状态: 见\"能力解读\"的分组清单");
+    lines.push("- 配置全文可在\"配置下发\"弹窗中查看当前配置；逐段讲解需接入 AI 服务。");
+    return lines.join("\n");
+}
+
+function _localDiagnose(ip) {
+    const last = window._aiLastDeploy;
+    const err = (last?.error || "").toLowerCase();
+    const lines = ["**本地诊断清单**" + (last?.error ? `（最近报错: ${last.error}）` : "")];
+    if (err.includes("unrecognized")) {
+        lines.push("1. 报错含义: 该镜像不认识此命令——大概率设备确实不支持该功能。");
+        lines.push("2. 先看\"能力识别\"里这项协议是否标记不支持；再看矩阵徽标的镜像家族。");
+        lines.push("3. 改用\"协议角色\"页对应协议的填空模板，模板只发设备支持的命令。");
+    } else if (err.includes("timeout") || err.includes("timed out")) {
+        lines.push("1. SSH 会话超时: 检查管理网段 IP/掩码、Windows 虚拟网卡、代理/TUN 是否劫持。");
+        lines.push("2. 设备侧验证: 用下方\"连通性验证\"ping 管理地址。");
+    } else if (err.includes("authentication") || err.includes("auth")) {
+        lines.push("1. 认证失败: 核对 local-user 用户名/密码与设备列表里配置一致。");
+        lines.push("2. 检查 aaa 与 user-interface vty 认证模式（aaa / password）。");
+    } else if (err) {
+        lines.push("1. 核对命令回显中 ^ 指示的出错位置（VRP 会标注错误列）。");
+        lines.push("2. 分段执行命令，先 system-view 再进视图，确认视图层级正确。");
+    } else {
+        lines.push("1. 暂无下发失败记录。遇到问题把报错原文发给助教即可。");
+    }
+    lines.push("3. 每次修改前系统都会自动备份，backups/ 目录可回退。");
+    return lines.join("\n");
+}
+
 function aiQuickTask(task) {
     const ip = document.getElementById("ai-device-select")?.value;
     if (!ip) {
         showStatus("batch-status", "请先在 AI 助教顶部选择一台设备", "warning");
         return;
     }
+    if (window._aiConfigured === false && _localFallback(task, ip)) return;
     if (task === "diagnose") {
         const last = window._aiLastDeploy;
         if (!last || !last.error) {
