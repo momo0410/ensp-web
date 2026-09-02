@@ -13,6 +13,7 @@ from typing import Optional
 from .device_connector import (
     import_netmiko,
     build_conn_params,
+    get_cli_error,
     safe_disconnect,
 )
 
@@ -85,6 +86,10 @@ def backup_device_config(
 
         if not config_output or len(config_output) < 10:
             result["error"] = "获取到的配置为空或过短"
+            return result
+        cli_error = get_cli_error(config_output)
+        if cli_error:
+            result["error"] = f"设备拒绝获取当前配置: {cli_error}"
             return result
 
         # Generate filename

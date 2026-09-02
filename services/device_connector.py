@@ -5,10 +5,29 @@ device_connector.py - SSH 设备连接工具模块
 """
 
 import logging
+import re
 import socket
 from typing import Optional, Tuple, Any
 
 logger = logging.getLogger("ensp-web.connector")
+
+# ANSI 转义序列：ESC[...字母（光标移动/清屏等）
+_ANSI_ESC_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+# ESC 字节丢失后残留的光标移动片段，如 "[42D"（console 通道实测会出现，
+# 会把回显吃成 "isplay vlan" 这类残句，导致误判 Unrecognized command）
+_ANSI_RESIDUE_RE = re.compile(r"\[\d+[A-Za-z]")
+_BACKSPACE_RE = re.compile(r"\x08")
+
+
+def strip_ansi(text: str) -> str:
+    """清理终端 ANSI 转义序列及其丢失 ESC 后的残留片段。"""
+    if not text:
+        return text
+    text = _ANSI_ESC_RE.sub("", text)
+    text = _ANSI_RESIDUE_RE.sub("", text)
+    text = _BACKSPACE_RE.sub("", text)
+    return text
+
 
 DEFAULT_SSH_USERNAME = "admin"
 DEFAULT_SSH_PASSWORD = "Huawei@123"
@@ -103,6 +122,19 @@ def safe_disconnect(connection: Any) -> None:
             pass
 
 
+def ask_help_timing(connection: Any, command: str, read_timeout: int = 4) -> str:
+    """发送单独成行的 `?` 类命令并按 timing 模式读回帮助输出。
+
+    netmiko 对 `?` 的 send_command 路径依赖提示符匹配、不稳定，统一走
+    timing 模式（读到空闲即返回）；旧版 netmiko 无 read_timeout 参数时降级。
+    """
+    try:
+        return connection.send_command_timing(command, read_timeout=read_timeout,
+                                              delay_factor=1)
+    except TypeError:
+        return connection.send_command_timing(command, delay_factor=2)
+
+
 def run_display_command(connection: Any, command: str, read_timeout: int = 15) -> dict:
     """
     执行单条 display 命令并返回结果字典。
@@ -112,10 +144,40 @@ def run_display_command(connection: Any, command: str, read_timeout: int = 15) -
     """
     try:
         output = connection.send_command(command, read_timeout=read_timeout)
-        return {"success": True, "output": output, "error": None}
+        return command_result_from_output(output)
     except Exception as e:
         error_msg = str(e)
         return {"success": False, "output": "", "error": error_msg}
+
+
+_CLI_ERROR_PATTERNS = (
+    re.compile(r"error:\s*unrecognized command", re.IGNORECASE),
+    re.compile(r"error:\s*wrong parameter", re.IGNORECASE),
+    re.compile(r"error:\s*too many parameters", re.IGNORECASE),
+    re.compile(r"error:\s*incomplete command", re.IGNORECASE),
+    re.compile(r"\binvalid input\b", re.IGNORECASE),
+    re.compile(r"\bunknown command\b", re.IGNORECASE),
+    re.compile(r"\bambiguous command\b", re.IGNORECASE),
+)
+
+
+def get_cli_error(output: str) -> Optional[str]:
+    """Return a concise device CLI error when command output contains one."""
+    if not output:
+        return None
+    for line in output.splitlines():
+        stripped = line.strip()
+        if any(pattern.search(stripped) for pattern in _CLI_ERROR_PATTERNS):
+            return stripped
+    return None
+
+
+def command_result_from_output(output: str) -> dict:
+    """Build a command result without treating a device CLI rejection as success."""
+    cli_error = get_cli_error(output)
+    if cli_error:
+        return {"success": False, "output": output, "error": cli_error}
+    return {"success": True, "output": output, "error": None}
 
 
 def is_unsupported_error(error_msg: str) -> bool:
@@ -137,14 +199,4 @@ def is_unsupported_error(error_msg: str) -> bool:
 
 def is_output_unsupported(output: str) -> bool:
     """判断命令输出文本是否包含不支持关键字。"""
-    if not output:
-        return False
-    lower = output.lower()
-    return any(kw in lower for kw in [
-        "unrecognized command",
-        "wrong parameter",
-        "too many parameters",
-        "invalid input",
-        "unknown command",
-        "ambiguous command",
-    ])
+    return get_cli_error(output) is not None

@@ -4,3 +4,4 @@ psutil==6.0.0
 netmiko==4.3.0
 ping3==4.0.4
 filelock>=3.13.0
+httpx>=0.27.0

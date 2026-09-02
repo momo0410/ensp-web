@@ -1,23 +1,278 @@
 """
-config_builder.py - 配置模板命令生成器
-======================================
-根据配置类型和表单参数生成华为 VRP 配置命令。
-只生成预览，不连接设备。
-支持所有可配置的设备能力。
+config_builder.py - 配置模板命令生成器（声明式）
+=================================================
+单一数据源：每个模板 = fields（表单定义） + command_template（命令模板）。
+命令生成由通用模板渲染器完成，无需为每条命令编写 Python 函数。
+
+模板语法（command_template 每行一条 VRP 命令）：
+  * {{var}}            变量替换；变量为空（None/""/未传）则整行丢弃
+  * ?cond: TEXT        条件行：仅当 cond 为真时输出 TEXT（TEXT 内可含 {{var}}）
+  * {{?cond: text}}    内联条件：cond 为真替换为 text，否则替换为空（text 内可含 {{var}}，支持嵌套）
+  * cond 语法：var / !var / var==value / var!=value / var>value / var<value / var>=value / var<=value
+  * 必填由模板的 required 列表 + fields 的 required 字段共同决定（渲染前校验，缺失则返回空）
 """
 
+import re
 from typing import List, Dict, Any, Optional
 
 
 # ---------------------------------------------------------------------------
-# 配置模板定义
+# 模板渲染引擎（通用命令生成器）
+# ---------------------------------------------------------------------------
+
+class _DropLine(Exception):
+    """内部信号：某变量为空，需要丢弃当前行。"""
+    pass
+
+
+_TRUTHY_FALSE = {"false", "0", "off", "no", "none", "null", ""}
+
+
+def _truthy(val) -> bool:
+    if val is None:
+        return False
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)):
+        return val != 0
+    s = str(val).strip().lower()
+    return s not in _TRUTHY_FALSE
+
+
+def _eval_cond(cond: str, params: dict) -> bool:
+    """计算条件表达式：var / !var / var==v / var!=v / var>v / var<v / var>=v / var<=v。"""
+    cond = cond.strip()
+    if cond.startswith("!"):
+        return not _truthy(params.get(cond[1:].strip()))
+    for op in ("==", "!=", ">=", "<=", ">", "<"):
+        if op in cond:
+            name, _, val = cond.partition(op)
+            name = name.strip()
+            val = val.strip()
+            left = params.get(name, "")
+            try:
+                if op in ("==", "!="):
+                    return (str(left) == val) if op == "==" else (str(left) != val)
+                lv, rv = float(left), float(val)
+                return {">": lv > rv, "<": lv < rv, ">=": lv >= rv, "<=": lv <= rv}[op]
+            except (ValueError, TypeError):
+                return False
+    return _truthy(params.get(cond))
+
+
+def _match_brace(text: str, start: int) -> Optional[int]:
+    """从 text[start:start+2]=='{{' 开始，找到匹配的 '}}' 结束下标。"""
+    if not text[start:start + 2] == "{{":
+        return None
+    depth = 1
+    i = start + 2
+    n = len(text)
+    while i < n and depth > 0:
+        if text[i:i + 2] == "{{":
+            depth += 1
+            i += 2
+        elif text[i:i + 2] == "}}":
+            depth -= 1
+            i += 2
+        else:
+            i += 1
+    return i if depth == 0 else None
+
+
+def _expand(text: str, params: dict) -> str:
+    """展开一行文本中的所有 {{...}}（变量 / 内联条件），变量为空抛 _DropLine 由上层决定丢行。"""
+    out = []
+    i, n = 0, len(text)
+    while i < n:
+        if text[i:i + 2] == "{{":
+            j = _match_brace(text, i)
+            if j is None:
+                out.append(text[i:])
+                break
+            inner = text[i + 2:j - 2]
+            seg = _expand_inner(inner, params)
+            if seg is None:
+                raise _DropLine()
+            out.append(seg)
+            i = j
+        else:
+            out.append(text[i])
+            i += 1
+    return "".join(out)
+
+
+def _expand_inner(inner: str, params: dict) -> Optional[str]:
+    """处理单段 inner（已去掉外层 {{ }}）。"""
+    if inner.startswith("?"):
+        rest = inner[1:]
+        idx = rest.find(":")
+        if idx == -1:
+            return ""
+        cond = rest[:idx].strip()
+        body = rest[idx + 1:]
+        if _eval_cond(cond, params):
+            try:
+                return _expand(body, params)
+            except _DropLine:
+                return ""  # 内联内的变量为空，仅丢弃该内联段，不影响外层行
+        return ""
+    name = inner.strip()
+    val = params.get(name, "")
+    if val in (None, ""):
+        return None
+    return str(val)
+
+
+def _render_line(line: str, params: dict) -> Optional[str]:
+    s = line.strip()
+    if not s:
+        return None
+    if s.startswith("?"):
+        m = re.match(r"^\?(.+?):\s*(.*)$", s, re.S)
+        if m:
+            cond, text = m.group(1).strip(), m.group(2)
+            if not _eval_cond(cond, params):
+                return None
+            try:
+                return _expand(text, params)
+            except _DropLine:
+                return None
+    try:
+        result = _expand(s, params)
+    except _DropLine:
+        return None
+    # 整行内联条件（如 {{?cond: text}}）在条件为假时展开为空串，应整行丢弃
+    if result == "" and s.startswith("{{?"):
+        return None
+    return result
+
+
+def render_template_commands(template: List[str], params: dict) -> List[str]:
+    """将命令模板渲染为 VRP 命令列表。"""
+    out = []
+    for line in template:
+        r = _render_line(line, params or {})
+        if r is not None:
+            out.append(r)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# 配置模板定义（单一数据源：fields + command_template + required）
 # ---------------------------------------------------------------------------
 
 CONFIG_TEMPLATES: Dict[str, Dict[str, Any]] = {
+    # ========== 组合业务方案 ==========
+    "branch_ospf": {
+        "name": "分支接口 + OSPF",
+        "icon": "&#x1F5A7;",
+        "roles": ["router", "l3_switch"],
+        "category": "solution",
+        "required": ["interface", "ip_address", "subnet_mask", "process_id", "network", "wildcard"],
+        "fields": [
+            {"name": "interface", "label": "业务接口", "type": "text", "required": True,
+             "placeholder": "GigabitEthernet0/0/1"},
+            {"name": "ip_address", "label": "接口 IP", "type": "text", "required": True,
+             "placeholder": "10.0.12.1"},
+            {"name": "subnet_mask", "label": "子网掩码", "type": "text", "required": True,
+             "placeholder": "255.255.255.0"},
+            {"name": "process_id", "label": "OSPF 进程号", "type": "number", "default": "1",
+             "required": True, "placeholder": "1"},
+            {"name": "router_id", "label": "Router ID", "type": "text",
+             "placeholder": "1.1.1.1"},
+            {"name": "area", "label": "区域 ID", "type": "text", "default": "0",
+             "required": True, "placeholder": "0"},
+            {"name": "network", "label": "宣告网络", "type": "text", "required": True,
+             "placeholder": "10.0.12.0", "auto_fill_target": "wildcard",
+             "auto_fill_type": "network_to_wildcard"},
+            {"name": "wildcard", "label": "反掩码", "type": "text", "default": "0.0.0.255",
+             "required": True, "placeholder": "0.0.0.255"},
+        ],
+        "command_template": [
+            "interface {{interface}}",
+            "ip address {{ip_address}} {{subnet_mask}}",
+            "quit",
+            "ospf {{process_id}}{{?router_id: router-id {{router_id}}}}",
+            "area {{area}}",
+            "network {{network}} {{wildcard}}",
+            "quit",
+            "quit",
+        ],
+    },
+    "vlan_gateway_dhcp": {
+        "name": "VLAN 网关 + DHCP",
+        "icon": "&#x1F3E2;",
+        "roles": ["l3_switch"],
+        "category": "solution",
+        "required": ["vlan_id", "access_interface", "gateway", "subnet_mask", "pool_name", "network"],
+        "fields": [
+            {"name": "vlan_id", "label": "VLAN ID", "type": "number", "required": True,
+             "placeholder": "10"},
+            {"name": "access_interface", "label": "Access 接口", "type": "text", "required": True,
+             "placeholder": "GigabitEthernet0/0/1"},
+            {"name": "gateway", "label": "网关地址", "type": "text", "required": True,
+             "placeholder": "192.168.10.1"},
+            {"name": "subnet_mask", "label": "子网掩码", "type": "text", "required": True,
+             "placeholder": "255.255.255.0"},
+            {"name": "pool_name", "label": "地址池名称", "type": "text", "required": True,
+             "placeholder": "vlan10"},
+            {"name": "network", "label": "地址池网络", "type": "text", "required": True,
+             "placeholder": "192.168.10.0"},
+            {"name": "dns", "label": "DNS 服务器", "type": "text", "default": "8.8.8.8",
+             "placeholder": "8.8.8.8"},
+        ],
+        "command_template": [
+            "vlan {{vlan_id}}",
+            "quit",
+            "interface {{access_interface}}",
+            "port link-type access",
+            "port default vlan {{vlan_id}}",
+            "quit",
+            "dhcp enable",
+            "ip pool {{pool_name}}",
+            "network {{network}} mask {{subnet_mask}}",
+            "gateway-list {{gateway}}",
+            "{{?dns: dns-list {{dns}}}}",
+            "quit",
+            "interface Vlanif {{vlan_id}}",
+            "ip address {{gateway}} {{subnet_mask}}",
+            "dhcp select global",
+            "quit",
+        ],
+    },
+    "edge_easy_ip_nat": {
+        "name": "出口 ACL + Easy-IP NAT",
+        "icon": "&#x1F310;",
+        "roles": ["router"],
+        "category": "solution",
+        "required": ["acl_number", "inside_network", "inside_wildcard", "outside_interface"],
+        "fields": [
+            {"name": "acl_number", "label": "ACL 编号", "type": "number", "default": "2000",
+             "required": True, "placeholder": "2000"},
+            {"name": "inside_network", "label": "内网地址", "type": "text", "required": True,
+             "placeholder": "192.168.10.0", "auto_fill_target": "inside_wildcard",
+             "auto_fill_type": "network_to_wildcard"},
+            {"name": "inside_wildcard", "label": "内网反掩码", "type": "text", "default": "0.0.0.255",
+             "required": True, "placeholder": "0.0.0.255"},
+            {"name": "outside_interface", "label": "出口接口", "type": "text", "required": True,
+             "placeholder": "GigabitEthernet0/0/0"},
+        ],
+        "command_template": [
+            "acl number {{acl_number}}",
+            "rule permit source {{inside_network}} {{inside_wildcard}}",
+            "quit",
+            "interface {{outside_interface}}",
+            "nat outbound {{acl_number}}",
+            "quit",
+        ],
+    },
     # ========== 路由相关 ==========
     "interface_ip": {
         "name": "配置接口 IP",
         "icon": "&#x1F310;",
+        "roles": ["router", "l3_switch", "switch"],
+        "category": "routing",
+        "required": ["interface", "ip_address", "subnet_mask"],
         "fields": [
             {"name": "interface", "label": "接口", "type": "text", "required": True,
              "placeholder": "GigabitEthernet0/0/0"},
@@ -26,12 +281,18 @@ CONFIG_TEMPLATES: Dict[str, Dict[str, Any]] = {
             {"name": "subnet_mask", "label": "子网掩码", "type": "text", "required": True,
              "placeholder": "255.255.255.0"},
         ],
-        "roles": ["router", "l3_switch", "switch"],
-        "category": "routing",
+        "command_template": [
+            "interface {{interface}}",
+            "ip address {{ip_address}} {{subnet_mask}}",
+            "quit",
+        ],
     },
     "static_route": {
         "name": "配置静态路由",
         "icon": "&#x1F6E4;",
+        "roles": ["router", "l3_switch"],
+        "category": "routing",
+        "required": ["destination", "mask", "next_hop"],
         "fields": [
             {"name": "destination", "label": "目标网络", "type": "text", "required": True,
              "placeholder": "10.0.0.0"},
@@ -40,30 +301,139 @@ CONFIG_TEMPLATES: Dict[str, Dict[str, Any]] = {
             {"name": "next_hop", "label": "下一跳", "type": "text", "required": True,
              "placeholder": "192.168.1.1"},
         ],
-        "roles": ["router", "l3_switch"],
-        "category": "routing",
+        "command_template": [
+            "ip route-static {{destination}} {{mask}} {{next_hop}}",
+        ],
     },
     "ospf": {
         "name": "配置 OSPF",
         "icon": "&#x1F310;",
-        "fields": [
-            {"name": "process_id", "label": "进程号", "type": "number", "default": "1",
-             "required": True, "placeholder": "1"},
-            {"name": "router_id", "label": "Router ID", "type": "text",
-             "placeholder": "1.1.1.1"},
-            {"name": "area", "label": "区域", "type": "text", "default": "0",
-             "required": True, "placeholder": "0"},
-            {"name": "network", "label": "网络地址", "type": "text", "required": True,
-             "placeholder": "192.168.56.0"},
-            {"name": "wildcard", "label": "反掩码", "type": "text", "required": True,
-             "placeholder": "0.0.0.255"},
+        "field_groups": [
+            {"id": "basic", "name": "基础配置", "icon": "&#x1F4CB;"},
+            {"id": "network", "name": "网络宣告", "icon": "&#x1F310;"},
+            {"id": "interface", "name": "接口参数", "icon": "&#x1F517;"},
+            {"id": "auth", "name": "认证配置", "icon": "&#x1F512;"},
+            {"id": "advanced", "name": "高级配置", "icon": "&#x2699;"},
         ],
         "roles": ["router", "l3_switch"],
         "category": "routing",
+        "required": ["process_id", "network", "wildcard"],
+        "fields": [
+            {"name": "process_id", "label": "进程号", "type": "number", "default": "1",
+             "required": True, "placeholder": "1", "group": "basic"},
+            {"name": "router_id", "label": "Router ID", "type": "text",
+             "placeholder": "1.1.1.1", "group": "basic"},
+            {"name": "area", "label": "区域 ID", "type": "text", "default": "0",
+             "required": True, "placeholder": "0", "group": "basic"},
+            {"name": "area_type", "label": "区域类型", "type": "select", "default": "normal",
+             "options": [
+                 {"value": "normal", "label": "普通区域"},
+                 {"value": "stub", "label": "Stub 区域"},
+                 {"value": "stub_no_summary", "label": "Totally Stub"},
+                 {"value": "nssa", "label": "NSSA 区域"},
+                 {"value": "nssa_no_summary", "label": "Totally NSSA"},
+             ], "group": "basic"},
+            {"name": "network", "label": "网络地址", "type": "text", "required": True,
+             "placeholder": "192.168.56.0", "group": "network",
+             "auto_fill_target": "wildcard", "auto_fill_type": "network_to_wildcard"},
+            {"name": "wildcard", "label": "反掩码", "type": "text", "required": True,
+             "placeholder": "0.0.0.255", "group": "network"},
+            {"name": "network2", "label": "网络地址 2", "type": "text",
+             "placeholder": "10.0.0.0", "group": "network",
+             "auto_fill_target": "wildcard2", "auto_fill_type": "network_to_wildcard"},
+            {"name": "wildcard2", "label": "反掩码 2", "type": "text",
+             "placeholder": "0.0.0.255", "group": "network"},
+            {"name": "network3", "label": "网络地址 3", "type": "text",
+             "placeholder": "172.16.0.0", "group": "network",
+             "auto_fill_target": "wildcard3", "auto_fill_type": "network_to_wildcard"},
+            {"name": "wildcard3", "label": "反掩码 3", "type": "text",
+             "placeholder": "0.0.0.255", "group": "network"},
+            {"name": "interface", "label": "接口名", "type": "text",
+             "placeholder": "GigabitEthernet0/0/0", "group": "interface"},
+            {"name": "cost", "label": "接口开销", "type": "number",
+             "placeholder": "1", "group": "interface"},
+            {"name": "hello_interval", "label": "Hello 间隔 (秒)", "type": "number",
+             "placeholder": "10", "group": "interface"},
+            {"name": "dead_interval", "label": "Dead 间隔 (秒)", "type": "number",
+             "placeholder": "40", "group": "interface"},
+            {"name": "dr_priority", "label": "DR 优先级", "type": "number",
+             "placeholder": "1", "group": "interface"},
+            {"name": "network_type", "label": "网络类型", "type": "select", "default": "default",
+             "options": [
+                 {"value": "default", "label": "默认"},
+                 {"value": "broadcast", "label": "广播"},
+                 {"value": "nbma", "label": "NBMA"},
+                 {"value": "p2p", "label": "点对点"},
+                 {"value": "p2mp", "label": "点对多点"},
+             ], "group": "interface"},
+            {"name": "auth_type", "label": "认证类型", "type": "select", "default": "none",
+             "options": [
+                 {"value": "none", "label": "无认证"},
+                {"value": "simple", "label": "简单认证"},
+                 {"value": "md5", "label": "MD5 认证"},
+             ], "group": "auth"},
+            {"name": "auth_key", "label": "认证密码", "type": "password",
+             "placeholder": "Huawei@123", "group": "auth"},
+            {"name": "auth_key_id", "label": "MD5 密钥 ID", "type": "number", "default": "1",
+             "placeholder": "1", "group": "auth"},
+            {"name": "silent_interface", "label": "静默接口", "type": "text",
+             "placeholder": "GigabitEthernet0/0/1", "group": "advanced"},
+            {"name": "default_route_advertise", "label": "通告默认路由", "type": "checkbox",
+             "default": False, "group": "advanced"},
+            {"name": "default_route_cost", "label": "默认路由开销", "type": "number",
+             "placeholder": "1", "group": "advanced"},
+            {"name": "reference_bandwidth", "label": "参考带宽 (Mbps)", "type": "number",
+             "placeholder": "100", "group": "advanced"},
+            {"name": "route_aggregation", "label": "路由聚合", "type": "text",
+             "placeholder": "192.168.0.0 255.255.0.0", "group": "advanced"},
+            {"name": "import_static", "label": "引入静态路由", "type": "checkbox",
+             "default": False, "group": "advanced"},
+            {"name": "import_connected", "label": "引入直连路由", "type": "checkbox",
+             "default": False, "group": "advanced"},
+            {"name": "import_bgp", "label": "引入 BGP", "type": "checkbox",
+             "default": False, "group": "advanced"},
+            {"name": "bfd_enable", "label": "启用 BFD", "type": "checkbox",
+             "default": False, "group": "advanced"},
+        ],
+        "command_template": [
+            "{{?bfd_enable: bfd}}",
+            "{{?bfd_enable: quit}}",
+            "ospf {{process_id}}{{?router_id: router-id {{router_id}}}}",
+            "area {{area}}",
+            "{{?area_type==stub: stub}}",
+            "{{?area_type==stub_no_summary: stub no-summary}}",
+            "{{?area_type==nssa: nssa}}",
+            "{{?area_type==nssa_no_summary: nssa no-summary}}",
+            "{{?auth_type==simple: authentication-mode simple cipher {{auth_key}}}}",
+            "{{?auth_type==md5: authentication-mode md5 {{auth_key_id}} cipher {{auth_key}}}}",
+            "network {{network}} {{wildcard}}",
+            "{{?network2: network {{network2}} {{wildcard2}}}}",
+            "{{?network3: network {{network3}} {{wildcard3}}}}",
+            "{{?route_aggregation: abr-summary {{route_aggregation}}}}",
+            "quit",
+            "{{?silent_interface: silent-interface {{silent_interface}}}}",
+            "{{?default_route_advertise: default-route-advertise}}{{?default_route_cost: cost {{default_route_cost}}}}",
+            "{{?import_static: import-route static}}",
+            "{{?import_connected: import-route direct}}",
+            "{{?import_bgp: import-route bgp}}",
+            "{{?reference_bandwidth: bandwidth-reference {{reference_bandwidth}}}}",
+            "{{?bfd_enable: bfd all-interfaces enable}}",
+            "quit",
+            "{{?interface: interface {{interface}}}}",
+            "{{?cost: ospf cost {{cost}}}}",
+            "{{?hello_interval: ospf timer hello {{hello_interval}}}}",
+            "{{?dead_interval: ospf timer dead {{dead_interval}}}}",
+            "{{?dr_priority: ospf dr-priority {{dr_priority}}}}",
+            "{{?network_type!=default: ospf network-type {{network_type}}}}",
+            "{{?interface: quit}}",
+        ],
     },
     "isis": {
         "name": "配置 IS-IS",
         "icon": "&#x1F310;",
+        "roles": ["router", "l3_switch"],
+        "category": "routing",
+        "required": ["net_entity", "interface"],
         "fields": [
             {"name": "process_id", "label": "进程号", "type": "number", "default": "1",
              "required": True, "placeholder": "1"},
@@ -72,18 +442,28 @@ CONFIG_TEMPLATES: Dict[str, Dict[str, Any]] = {
             {"name": "is_level", "label": "级别", "type": "select", "default": "level-2",
              "options": [
                  {"value": "level-1", "label": "Level-1"},
-                 {"value": "level-2", "label": "Level-2"},
+                 {"value": "level-2", "label": "Level-1-2"},
                  {"value": "level-1-2", "label": "Level-1-2"},
              ]},
             {"name": "interface", "label": "接口", "type": "text", "required": True,
              "placeholder": "GigabitEthernet0/0/0"},
         ],
-        "roles": ["router", "l3_switch"],
-        "category": "routing",
+        "command_template": [
+            "isis {{process_id}}",
+            "network-entity {{net_entity}}",
+            "is-level {{is_level}}",
+            "quit",
+            "interface {{interface}}",
+            "isis enable {{process_id}}",
+            "quit",
+        ],
     },
     "bgp": {
         "name": "配置 BGP",
         "icon": "&#x1F310;",
+        "roles": ["router", "l3_switch"],
+        "category": "routing",
+        "required": ["local_as", "peer_ip", "peer_as"],
         "fields": [
             {"name": "local_as", "label": "本地 AS 号", "type": "number", "required": True,
              "placeholder": "65000"},
@@ -94,12 +474,19 @@ CONFIG_TEMPLATES: Dict[str, Dict[str, Any]] = {
             {"name": "peer_as", "label": "对端 AS 号", "type": "number", "required": True,
              "placeholder": "65001"},
         ],
-        "roles": ["router", "l3_switch"],
-        "category": "routing",
+        "command_template": [
+            "bgp {{local_as}}",
+            "{{?router_id: router-id {{router_id}}}}",
+            "peer {{peer_ip}} as-number {{peer_as}}",
+            "quit",
+        ],
     },
     "rip": {
         "name": "配置 RIP",
         "icon": "&#x1F310;",
+        "roles": ["router", "l3_switch"],
+        "category": "routing",
+        "required": ["network"],
         "fields": [
             {"name": "process_id", "label": "进程号", "type": "number", "default": "1",
              "required": True, "placeholder": "1"},
@@ -111,49 +498,76 @@ CONFIG_TEMPLATES: Dict[str, Dict[str, Any]] = {
             {"name": "network", "label": "网络地址", "type": "text", "required": True,
              "placeholder": "192.168.56.0"},
         ],
-        "roles": ["router", "l3_switch"],
-        "category": "routing",
+        "command_template": [
+            "rip {{process_id}}",
+            "{{?version==2: version 2}}",
+            "network {{network}}",
+            "quit",
+        ],
     },
     # ========== 交换相关 ==========
     "vlan": {
         "name": "配置 VLAN",
         "icon": "&#x1F4E6;",
+        "roles": ["switch", "l3_switch"],
+        "category": "switching",
+        "required": ["vlan_id"],
         "fields": [
             {"name": "vlan_id", "label": "VLAN ID", "type": "number", "required": True,
              "placeholder": "10"},
             {"name": "description", "label": "描述", "type": "text",
              "placeholder": "Office"},
         ],
-        "roles": ["switch", "l3_switch"],
-        "category": "switching",
+        "command_template": [
+            "vlan {{vlan_id}}",
+            "{{?description: description {{description}}}}",
+            "quit",
+        ],
     },
     "access_port": {
         "name": "配置 Access 接口",
         "icon": "&#x1F50C;",
+        "roles": ["switch", "l3_switch"],
+        "category": "switching",
+        "required": ["interface", "vlan_id"],
         "fields": [
             {"name": "interface", "label": "接口", "type": "text", "required": True,
              "placeholder": "GigabitEthernet0/0/1"},
             {"name": "vlan_id", "label": "VLAN ID", "type": "number", "required": True,
              "placeholder": "10"},
         ],
-        "roles": ["switch", "l3_switch"],
-        "category": "switching",
+        "command_template": [
+            "interface {{interface}}",
+            "port link-type access",
+            "port default vlan {{vlan_id}}",
+            "quit",
+        ],
     },
     "trunk_port": {
         "name": "配置 Trunk 接口",
         "icon": "&#x1F517;",
+        "roles": ["switch", "l3_switch"],
+        "category": "switching",
+        "required": ["interface", "allowed_vlans"],
         "fields": [
             {"name": "interface", "label": "接口", "type": "text", "required": True,
              "placeholder": "GigabitEthernet0/0/1"},
             {"name": "allowed_vlans", "label": "允许的 VLAN", "type": "text", "required": True,
              "placeholder": "10 20 30"},
         ],
-        "roles": ["switch", "l3_switch"],
-        "category": "switching",
+        "command_template": [
+            "interface {{interface}}",
+            "port link-type trunk",
+            "port trunk allow-pass vlan {{allowed_vlans}}",
+            "quit",
+        ],
     },
     "vlanif": {
         "name": "配置 VLANIF",
         "icon": "&#x1F310;",
+        "roles": ["switch", "l3_switch"],
+        "category": "switching",
+        "required": ["vlan_id", "ip_address", "subnet_mask"],
         "fields": [
             {"name": "vlan_id", "label": "VLAN ID", "type": "number", "required": True,
              "placeholder": "10"},
@@ -162,12 +576,18 @@ CONFIG_TEMPLATES: Dict[str, Dict[str, Any]] = {
             {"name": "subnet_mask", "label": "子网掩码", "type": "text", "required": True,
              "placeholder": "255.255.255.0"},
         ],
-        "roles": ["switch", "l3_switch"],
-        "category": "switching",
+        "command_template": [
+            "interface Vlanif {{vlan_id}}",
+            "ip address {{ip_address}} {{subnet_mask}}",
+            "quit",
+        ],
     },
     "stp": {
         "name": "配置 STP",
         "icon": "&#x1F333;",
+        "roles": ["switch", "l3_switch"],
+        "category": "switching",
+        "required": [],
         "fields": [
             {"name": "enable", "label": "启用 STP", "type": "checkbox", "default": True},
             {"name": "mode", "label": "模式", "type": "select", "default": "mstp",
@@ -179,12 +599,19 @@ CONFIG_TEMPLATES: Dict[str, Dict[str, Any]] = {
             {"name": "priority", "label": "优先级", "type": "number", "default": "32768",
              "placeholder": "32768"},
         ],
-        "roles": ["switch", "l3_switch"],
-        "category": "switching",
+        "command_template": [
+            "{{?enable: stp mode {{mode}}}}",
+            "{{?enable: stp priority {{priority}}}}",
+            "{{?enable: stp enable}}",
+            "{{?!enable: undo stp enable}}",
+        ],
     },
     "eth_trunk": {
         "name": "配置 Eth-Trunk",
         "icon": "&#x1F517;",
+        "roles": ["switch", "l3_switch", "router"],
+        "category": "switching",
+        "required": ["trunk_id", "member_interface"],
         "fields": [
             {"name": "trunk_id", "label": "Eth-Trunk 编号", "type": "number", "required": True,
              "placeholder": "1"},
@@ -196,22 +623,36 @@ CONFIG_TEMPLATES: Dict[str, Dict[str, Any]] = {
             {"name": "member_interface", "label": "成员接口", "type": "text", "required": True,
              "placeholder": "GigabitEthernet0/0/1"},
         ],
-        "roles": ["switch", "l3_switch", "router"],
-        "category": "switching",
+        "command_template": [
+            "interface Eth-Trunk {{trunk_id}}",
+            "{{?mode==lacp: mode lacp}}",
+            "quit",
+            "interface {{member_interface}}",
+            "eth-trunk {{trunk_id}}",
+            "quit",
+        ],
     },
     # ========== 基础网络功能 ==========
     "lldp": {
         "name": "配置 LLDP",
         "icon": "&#x1F517;",
+        "roles": ["router", "switch", "l3_switch"],
+        "category": "network",
+        "required": [],
         "fields": [
             {"name": "enable", "label": "启用 LLDP", "type": "checkbox", "default": True},
         ],
-        "roles": ["router", "switch", "l3_switch"],
-        "category": "network",
+        "command_template": [
+            "{{?enable: lldp enable}}",
+            "{{?!enable: undo lldp enable}}",
+        ],
     },
     "dhcp": {
         "name": "配置 DHCP",
         "icon": "&#x1F4E1;",
+        "roles": ["router", "l3_switch"],
+        "category": "network",
+        "required": ["pool_name", "network", "mask"],
         "fields": [
             {"name": "enable", "label": "启用 DHCP", "type": "checkbox", "default": True},
             {"name": "pool_name", "label": "地址池名称", "type": "text", "required": True,
@@ -227,12 +668,23 @@ CONFIG_TEMPLATES: Dict[str, Dict[str, Any]] = {
             {"name": "lease_days", "label": "租约天数", "type": "number", "default": "1",
              "placeholder": "1"},
         ],
-        "roles": ["router", "l3_switch"],
-        "category": "network",
+        "command_template": [
+            "{{?enable: dhcp enable}}",
+            "{{?enable: ip pool {{pool_name}}}}",
+            "{{?enable: network {{network}} mask {{mask}}}}",
+            "{{?enable: gateway-list {{gateway}}}}",
+            "{{?enable: dns-list {{dns}}}}",
+            "{{?enable: lease day {{lease_days}}}}",
+            "{{?enable: quit}}",
+            "{{?!enable: undo dhcp enable}}",
+        ],
     },
     "nat": {
         "name": "配置 NAT",
         "icon": "&#x1F504;",
+        "roles": ["router"],
+        "category": "network",
+        "required": ["nat_type", "acl_number", "interface", "global_ip", "inside_ip"],
         "fields": [
             {"name": "nat_type", "label": "NAT 类型", "type": "select", "default": "outbound",
              "options": [
@@ -249,12 +701,22 @@ CONFIG_TEMPLATES: Dict[str, Dict[str, Any]] = {
             {"name": "inside_ip", "label": "内网 IP", "type": "text",
              "placeholder": "192.168.1.100"},
         ],
-        "roles": ["router"],
-        "category": "network",
+        "command_template": [
+            "{{?nat_type==outbound: interface {{interface}}}}",
+            "{{?nat_type==outbound: nat outbound {{acl_number}}}}",
+            "{{?nat_type==outbound: quit}}",
+            "{{?nat_type==static: nat static global {{global_ip}} inside {{inside_ip}}}}",
+            "{{?nat_type==server: interface {{interface}}}}",
+            "{{?nat_type==server: nat server protocol tcp global {{global_ip}} inside {{inside_ip}}}}",
+            "{{?nat_type==server: quit}}",
+        ],
     },
     "vrrp": {
         "name": "配置 VRRP",
         "icon": "&#x1F6E1;",
+        "roles": ["router", "l3_switch"],
+        "category": "network",
+        "required": ["interface", "virtual_ip"],
         "fields": [
             {"name": "interface", "label": "接口", "type": "text", "required": True,
              "placeholder": "GigabitEthernet0/0/0"},
@@ -265,13 +727,20 @@ CONFIG_TEMPLATES: Dict[str, Dict[str, Any]] = {
             {"name": "priority", "label": "优先级", "type": "number", "default": "100",
              "placeholder": "100"},
         ],
-        "roles": ["router", "l3_switch"],
-        "category": "network",
+        "command_template": [
+            "interface {{interface}}",
+            "vrrp vrid {{vrid}} virtual-ip {{virtual_ip}}",
+            "vrrp vrid {{vrid}} priority {{priority}}",
+            "quit",
+        ],
     },
     # ========== 安全/管理功能 ==========
     "acl": {
         "name": "配置 ACL",
         "icon": "&#x1F6E1;",
+        "roles": ["router", "switch", "l3_switch"],
+        "category": "security",
+        "required": ["acl_number", "source"],
         "fields": [
             {"name": "acl_number", "label": "ACL 编号", "type": "number", "required": True,
              "placeholder": "3000"},
@@ -292,12 +761,18 @@ CONFIG_TEMPLATES: Dict[str, Dict[str, Any]] = {
             {"name": "destination", "label": "目的地址", "type": "text",
              "placeholder": "any"},
         ],
-        "roles": ["router", "switch", "l3_switch"],
-        "category": "security",
+        "command_template": [
+            "acl number {{acl_number}}",
+            "rule {{rule_type}} {{protocol}} source {{source}}{{?destination!=any: destination {{destination}}}}",
+            "quit",
+        ],
     },
     "ssh_user": {
         "name": "配置 SSH 用户",
         "icon": "&#x1F512;",
+        "roles": ["router", "switch", "l3_switch"],
+        "category": "security",
+        "required": ["username", "password"],
         "fields": [
             {"name": "username", "label": "用户名", "type": "text", "default": "admin",
              "required": True, "placeholder": "admin"},
@@ -306,12 +781,26 @@ CONFIG_TEMPLATES: Dict[str, Dict[str, Any]] = {
             {"name": "privilege_level", "label": "权限等级", "type": "number", "default": "15",
              "required": True, "placeholder": "15"},
         ],
-        "roles": ["router", "switch", "l3_switch"],
-        "category": "security",
+        "command_template": [
+            "aaa",
+            "local-user {{username}} password cipher {{password}}",
+            "local-user {{username}} privilege level {{privilege_level}}",
+            "local-user {{username}} service-type ssh",
+            "quit",
+            "stelnet server enable",
+            "ssh user {{username}} authentication-type password",
+            "user-interface vty 0 4",
+            "authentication-mode aaa",
+            "protocol inbound ssh",
+            "quit",
+        ],
     },
     "telnet": {
         "name": "配置 Telnet",
         "icon": "&#x1F4BB;",
+        "roles": ["router", "switch", "l3_switch"],
+        "category": "security",
+        "required": [],
         "fields": [
             {"name": "enable", "label": "启用 Telnet 服务器", "type": "checkbox", "default": True},
             {"name": "username", "label": "用户名", "type": "text", "default": "admin",
@@ -321,12 +810,26 @@ CONFIG_TEMPLATES: Dict[str, Dict[str, Any]] = {
             {"name": "privilege_level", "label": "权限等级", "type": "number", "default": "15",
              "placeholder": "15"},
         ],
-        "roles": ["router", "switch", "l3_switch"],
-        "category": "security",
+        "command_template": [
+            "{{?enable: telnet server enable}}",
+            "{{?username: aaa}}",
+            "{{?username: local-user {{username}} password cipher {{password}}}}",
+            "{{?username: local-user {{username}} privilege level {{privilege_level}}}}",
+            "{{?username: local-user {{username}} service-type telnet}}",
+            "{{?username: quit}}",
+            "{{?username: user-interface vty 0 4}}",
+            "{{?username: authentication-mode aaa}}",
+            "{{?username: protocol inbound telnet}}",
+            "{{?username: quit}}",
+            "{{?!enable: undo telnet server enable}}",
+        ],
     },
     "snmp": {
         "name": "配置 SNMP",
         "icon": "&#x1F4CA;",
+        "roles": ["router", "switch", "l3_switch"],
+        "category": "security",
+        "required": ["community"],
         "fields": [
             {"name": "community", "label": "团体名", "type": "text", "default": "public",
              "required": True, "placeholder": "public"},
@@ -346,13 +849,20 @@ CONFIG_TEMPLATES: Dict[str, Dict[str, Any]] = {
             {"name": "sys_location", "label": "系统位置", "type": "text",
              "placeholder": "Beijing"},
         ],
-        "roles": ["router", "switch", "l3_switch"],
-        "category": "security",
+        "command_template": [
+            "snmp-agent community {{permission}} {{community}}",
+            "snmp-agent sys-info version {{version}}",
+            "{{?sys_contact: snmp-agent sys-info contact {{sys_contact}}}}",
+            "{{?sys_location: snmp-agent sys-info location {{sys_location}}}}",
+        ],
     },
     # ========== 安全/VPN 功能 ==========
     "ipsec": {
         "name": "配置 IPsec",
         "icon": "&#x1F512;",
+        "roles": ["router"],
+        "category": "vpn",
+        "required": ["proposal_name", "policy_name", "peer_name", "acl_number"],
         "fields": [
             {"name": "proposal_name", "label": "Proposal 名称", "type": "text", "required": True,
              "placeholder": "prop1"},
@@ -371,17 +881,29 @@ CONFIG_TEMPLATES: Dict[str, Dict[str, Any]] = {
              ]},
             {"name": "policy_name", "label": "Policy 名称", "type": "text", "required": True,
              "placeholder": "policy1"},
-            {"name": "peer_address", "label": "对端地址", "type": "text", "required": True,
-             "placeholder": "200.1.1.2"},
+            {"name": "peer_name", "label": "IKE Peer 名称", "type": "text", "required": True,
+             "placeholder": "peer1"},
             {"name": "acl_number", "label": "ACL 编号 (匹配流量)", "type": "number",
              "required": True, "placeholder": "3000"},
         ],
-        "roles": ["router"],
-        "category": "vpn",
+        "command_template": [
+            "ipsec proposal {{proposal_name}}",
+            "esp authentication-algorithm {{auth_algorithm}}",
+            "esp encryption-algorithm {{enc_algorithm}}",
+            "quit",
+            "ipsec policy {{policy_name}} 10 isakmp",
+            "security acl {{acl_number}}",
+            "ike-peer {{peer_name}}",
+            "proposal {{proposal_name}}",
+            "quit",
+        ],
     },
     "ike": {
         "name": "配置 IKE",
         "icon": "&#x1F511;",
+        "roles": ["router"],
+        "category": "vpn",
+        "required": ["proposal_name", "peer_name", "peer_address", "pre_shared_key"],
         "fields": [
             {"name": "proposal_name", "label": "Proposal 名称", "type": "text", "required": True,
              "placeholder": "ike_prop1"},
@@ -418,12 +940,27 @@ CONFIG_TEMPLATES: Dict[str, Dict[str, Any]] = {
             {"name": "local_address", "label": "本端地址", "type": "text",
              "placeholder": "200.1.1.1"},
         ],
-        "roles": ["router"],
-        "category": "vpn",
+        "command_template": [
+            "ike proposal {{proposal_name}}",
+            "authentication-method {{auth_method}}",
+            "encryption-algorithm {{enc_algorithm}}",
+            "authentication-algorithm {{auth_algorithm}}",
+            "dh {{dh_group}}",
+            "quit",
+            "ike peer {{peer_name}}",
+            "ike-proposal {{proposal_name}}",
+            "pre-shared-key simple {{pre_shared_key}}",
+            "remote-address {{peer_address}}",
+            "{{?local_address: local-address {{local_address}}}}",
+            "quit",
+        ],
     },
     "gre": {
         "name": "配置 GRE 隧道",
         "icon": "&#x1F6A7;",
+        "roles": ["router"],
+        "category": "vpn",
+        "required": ["source", "destination", "tunnel_ip"],
         "fields": [
             {"name": "tunnel_id", "label": "Tunnel 编号", "type": "number", "default": "0",
              "required": True, "placeholder": "0"},
@@ -441,12 +978,21 @@ CONFIG_TEMPLATES: Dict[str, Dict[str, Any]] = {
                  {"value": "ip", "label": "IP (IP封装)"},
              ]},
         ],
-        "roles": ["router"],
-        "category": "vpn",
+        "command_template": [
+            "interface Tunnel {{tunnel_id}}",
+            "ip address {{tunnel_ip}} {{tunnel_mask}}",
+            "tunnel-protocol {{protocol}}",
+            "source {{source}}",
+            "destination {{destination}}",
+            "quit",
+        ],
     },
     "vpn_instance": {
         "name": "配置 VPN 实例",
         "icon": "&#x1F3E2;",
+        "roles": ["router"],
+        "category": "vpn",
+        "required": ["name", "rd"],
         "fields": [
             {"name": "name", "label": "VPN 实例名称", "type": "text", "required": True,
              "placeholder": "vpn1"},
@@ -459,13 +1005,24 @@ CONFIG_TEMPLATES: Dict[str, Dict[str, Any]] = {
             {"name": "interface", "label": "绑定接口", "type": "text",
              "placeholder": "GigabitEthernet0/0/1"},
         ],
-        "roles": ["router"],
-        "category": "vpn",
+        "command_template": [
+            "ip vpn-instance {{name}}",
+            "route-distinguisher {{rd}}",
+            "{{?rt_export: vpn-target {{rt_export}} export-extcommunity}}",
+            "{{?rt_import: vpn-target {{rt_import}} import-extcommunity}}",
+            "quit",
+            "{{?interface: interface {{interface}}}}",
+            "{{?interface: ip binding vpn-instance {{name}}}}",
+            "{{?interface: quit}}",
+        ],
     },
 }
 
 # Verification commands per config type
 VERIFY_COMMANDS: Dict[str, List[str]] = {
+    "branch_ospf":    ["display ip interface brief", "display ospf peer"],
+    "vlan_gateway_dhcp": ["display vlan", "display ip interface brief", "display ip pool"],
+    "edge_easy_ip_nat": ["display acl all", "display current-configuration | include nat"],
     "interface_ip":   ["display ip interface brief"],
     "static_route":   ["display ip routing-table"],
     "ospf":           ["display ospf peer", "display current-configuration | include ospf"],
@@ -494,474 +1051,12 @@ VERIFY_COMMANDS: Dict[str, List[str]] = {
 
 # Category names for frontend grouping
 CATEGORY_NAMES = {
+    "solution": "组合业务方案",
     "routing": "路由协议",
     "switching": "交换功能",
     "network": "基础网络",
     "security": "安全管理",
     "vpn": "VPN/隧道",
-}
-
-
-# ---------------------------------------------------------------------------
-# 命令生成函数
-# ---------------------------------------------------------------------------
-
-def _build_interface_ip(params: dict) -> List[str]:
-    intf = params.get("interface", "").strip()
-    ip_addr = params.get("ip_address", "").strip()
-    mask = params.get("subnet_mask", "").strip()
-    if not intf or not ip_addr or not mask:
-        return []
-    return [
-        f"interface {intf}",
-        f"ip address {ip_addr} {mask}",
-        "quit",
-    ]
-
-
-def _build_static_route(params: dict) -> List[str]:
-    dest = params.get("destination", "").strip()
-    mask = params.get("mask", "").strip()
-    next_hop = params.get("next_hop", "").strip()
-    if not dest or not mask or not next_hop:
-        return []
-    return [f"ip route-static {dest} {mask} {next_hop}"]
-
-
-def _build_ospf(params: dict) -> List[str]:
-    pid = params.get("process_id", "1").strip()
-    rid = params.get("router_id", "").strip()
-    area = params.get("area", "0").strip()
-    network = params.get("network", "").strip()
-    wildcard = params.get("wildcard", "").strip()
-    if not network or not wildcard:
-        return []
-    cmds = [f"ospf {pid}" + (f" router-id {rid}" if rid else "")]
-    cmds.append(f"area {area}")
-    cmds.append(f"network {network} {wildcard}")
-    cmds.append("quit")
-    cmds.append("quit")
-    return cmds
-
-
-def _build_isis(params: dict) -> List[str]:
-    pid = params.get("process_id", "1").strip()
-    net = params.get("net_entity", "").strip()
-    level = params.get("is_level", "level-2").strip()
-    intf = params.get("interface", "").strip()
-    if not net or not intf:
-        return []
-    cmds = [
-        f"isis {pid}",
-        f"network-entity {net}",
-        f"is-level {level}",
-        "quit",
-        f"interface {intf}",
-        f"isis enable {pid}",
-        "quit",
-    ]
-    return cmds
-
-
-def _build_bgp(params: dict) -> List[str]:
-    local_as = params.get("local_as", "").strip()
-    rid = params.get("router_id", "").strip()
-    peer_ip = params.get("peer_ip", "").strip()
-    peer_as = params.get("peer_as", "").strip()
-    if not local_as or not peer_ip or not peer_as:
-        return []
-    cmds = [f"bgp {local_as}"]
-    if rid:
-        cmds.append(f"router-id {rid}")
-    cmds.append(f"peer {peer_ip} as-number {peer_as}")
-    cmds.append("quit")
-    return cmds
-
-
-def _build_rip(params: dict) -> List[str]:
-    pid = params.get("process_id", "1").strip()
-    ver = params.get("version", "2").strip()
-    network = params.get("network", "").strip()
-    if not network:
-        return []
-    cmds = [f"rip {pid}"]
-    if ver == "2":
-        cmds.append("version 2")
-    cmds.append(f"network {network}")
-    cmds.append("quit")
-    return cmds
-
-
-def _build_vlan(params: dict) -> List[str]:
-    vid = params.get("vlan_id", "").strip()
-    desc = params.get("description", "").strip()
-    if not vid:
-        return []
-    cmds = [f"vlan {vid}"]
-    if desc:
-        cmds.append(f"description {desc}")
-    cmds.append("quit")
-    return cmds
-
-
-def _build_access_port(params: dict) -> List[str]:
-    intf = params.get("interface", "").strip()
-    vid = params.get("vlan_id", "").strip()
-    if not intf or not vid:
-        return []
-    return [
-        f"interface {intf}",
-        "port link-type access",
-        f"port default vlan {vid}",
-        "quit",
-    ]
-
-
-def _build_trunk_port(params: dict) -> List[str]:
-    intf = params.get("interface", "").strip()
-    vlans = params.get("allowed_vlans", "").strip()
-    if not intf or not vlans:
-        return []
-    return [
-        f"interface {intf}",
-        "port link-type trunk",
-        f"port trunk allow-pass vlan {vlans}",
-        "quit",
-    ]
-
-
-def _build_vlanif(params: dict) -> List[str]:
-    vid = params.get("vlan_id", "").strip()
-    ip_addr = params.get("ip_address", "").strip()
-    mask = params.get("subnet_mask", "").strip()
-    if not vid or not ip_addr or not mask:
-        return []
-    return [
-        f"interface Vlanif {vid}",
-        f"ip address {ip_addr} {mask}",
-        "quit",
-    ]
-
-
-def _build_stp(params: dict) -> List[str]:
-    enable = params.get("enable", True)
-    if isinstance(enable, str):
-        enable = enable.lower() in ("true", "1", "yes", "on")
-    mode = params.get("mode", "mstp").strip()
-    priority = params.get("priority", "32768").strip()
-    cmds = []
-    if enable:
-        cmds.append(f"stp mode {mode}")
-        cmds.append(f"stp priority {priority}")
-        cmds.append("stp enable")
-    else:
-        cmds.append("undo stp enable")
-    return cmds
-
-
-def _build_eth_trunk(params: dict) -> List[str]:
-    tid = params.get("trunk_id", "").strip()
-    mode = params.get("mode", "lacp").strip()
-    member = params.get("member_interface", "").strip()
-    if not tid or not member:
-        return []
-    cmds = [
-        f"interface Eth-Trunk {tid}",
-    ]
-    if mode == "lacp":
-        cmds.append("mode lacp")
-    cmds.append("quit")
-    cmds.append(f"interface {member}")
-    cmds.append(f"eth-trunk {tid}")
-    cmds.append("quit")
-    return cmds
-
-
-def _build_lldp(params: dict) -> List[str]:
-    enable = params.get("enable", True)
-    if isinstance(enable, str):
-        enable = enable.lower() in ("true", "1", "yes", "on")
-    return ["lldp enable"] if enable else ["undo lldp enable"]
-
-
-def _build_dhcp(params: dict) -> List[str]:
-    enable = params.get("enable", True)
-    if isinstance(enable, str):
-        enable = enable.lower() in ("true", "1", "yes", "on")
-    if not enable:
-        return ["undo dhcp enable"]
-    pool = params.get("pool_name", "").strip()
-    network = params.get("network", "").strip()
-    mask = params.get("mask", "").strip()
-    gateway = params.get("gateway", "").strip()
-    dns = params.get("dns", "").strip()
-    lease = params.get("lease_days", "1").strip()
-    if not pool or not network or not mask:
-        return []
-    cmds = ["dhcp enable"]
-    cmds.append(f"ip pool {pool}")
-    cmds.append(f"network {network} mask {mask}")
-    if gateway:
-        cmds.append(f"gateway-list {gateway}")
-    if dns:
-        cmds.append(f"dns-list {dns}")
-    cmds.append(f"lease day {lease}")
-    cmds.append("quit")
-    return cmds
-
-
-def _build_nat(params: dict) -> List[str]:
-    nat_type = params.get("nat_type", "outbound").strip()
-    acl = params.get("acl_number", "").strip()
-    intf = params.get("interface", "").strip()
-    global_ip = params.get("global_ip", "").strip()
-    inside_ip = params.get("inside_ip", "").strip()
-    if nat_type == "outbound":
-        if not acl or not intf:
-            return []
-        return [
-            f"interface {intf}",
-            f"nat outbound {acl}",
-            "quit",
-        ]
-    elif nat_type == "static":
-        if not global_ip or not inside_ip:
-            return []
-        return [f"nat static global {global_ip} inside {inside_ip}"]
-    elif nat_type == "server":
-        if not global_ip or not inside_ip or not intf:
-            return []
-        return [
-            f"interface {intf}",
-            f"nat server protocol tcp global {global_ip} inside {inside_ip}",
-            "quit",
-        ]
-    return []
-
-
-def _build_vrrp(params: dict) -> List[str]:
-    intf = params.get("interface", "").strip()
-    vrid = params.get("vrid", "1").strip()
-    vip = params.get("virtual_ip", "").strip()
-    priority = params.get("priority", "100").strip()
-    if not intf or not vip:
-        return []
-    return [
-        f"interface {intf}",
-        f"vrrp vrid {vrid} virtual-ip {vip}",
-        f"vrrp vrid {vrid} priority {priority}",
-        "quit",
-    ]
-
-
-def _build_acl(params: dict) -> List[str]:
-    acl_num = params.get("acl_number", "").strip()
-    rule_type = params.get("rule_type", "permit").strip()
-    protocol = params.get("protocol", "ip").strip()
-    source = params.get("source", "").strip()
-    dest = params.get("destination", "").strip()
-    if not acl_num or not source:
-        return []
-    cmds = [f"acl number {acl_num}"]
-    rule = f"rule {rule_type} {protocol} source {source}"
-    if dest and dest.lower() != "any":
-        rule += f" destination {dest}"
-    cmds.append(rule)
-    cmds.append("quit")
-    return cmds
-
-
-def _build_ssh_user(params: dict) -> List[str]:
-    username = params.get("username", "admin").strip()
-    password = params.get("password", "").strip()
-    priv = params.get("privilege_level", "15").strip()
-    if not username or not password:
-        return []
-    return [
-        "aaa",
-        f"local-user {username} password cipher {password}",
-        f"local-user {username} privilege level {priv}",
-        f"local-user {username} service-type ssh",
-        "quit",
-        "stelnet server enable",
-        f"ssh user {username} authentication-type password",
-        "user-interface vty 0 4",
-        "authentication-mode aaa",
-        "protocol inbound ssh",
-        "quit",
-    ]
-
-
-def _build_telnet(params: dict) -> List[str]:
-    enable = params.get("enable", True)
-    if isinstance(enable, str):
-        enable = enable.lower() in ("true", "1", "yes", "on")
-    username = params.get("username", "").strip()
-    password = params.get("password", "").strip()
-    priv = params.get("privilege_level", "15").strip()
-    cmds = []
-    if enable:
-        cmds.append("telnet server enable")
-    else:
-        cmds.append("undo telnet server enable")
-        return cmds
-    if username and password:
-        cmds.append("aaa")
-        cmds.append(f"local-user {username} password cipher {password}")
-        cmds.append(f"local-user {username} privilege level {priv}")
-        cmds.append(f"local-user {username} service-type telnet")
-        cmds.append("quit")
-        cmds.append("user-interface vty 0 4")
-        cmds.append("authentication-mode aaa")
-        cmds.append("protocol inbound telnet")
-        cmds.append("quit")
-    return cmds
-
-
-def _build_snmp(params: dict) -> List[str]:
-    community = params.get("community", "public").strip()
-    permission = params.get("permission", "read").strip()
-    version = params.get("version", "v2c").strip()
-    contact = params.get("sys_contact", "").strip()
-    location = params.get("sys_location", "").strip()
-    if not community:
-        return []
-    cmds = []
-    if version == "all":
-        cmds.append(f"snmp-agent community {permission} {community}")
-    else:
-        cmds.append(f"snmp-agent community {permission} {community} acl 2000")
-        cmds.append(f"snmp-agent sys-info version {version}")
-    if contact:
-        cmds.append(f"snmp-agent sys-info contact {contact}")
-    if location:
-        cmds.append(f"snmp-agent sys-info location {location}")
-    return cmds
-
-
-def _build_ipsec(params: dict) -> List[str]:
-    prop_name = params.get("proposal_name", "").strip()
-    enc = params.get("enc_algorithm", "aes-256").strip()
-    auth = params.get("auth_algorithm", "sha2-256").strip()
-    policy_name = params.get("policy_name", "").strip()
-    peer = params.get("peer_address", "").strip()
-    acl = params.get("acl_number", "").strip()
-    if not prop_name or not policy_name or not peer or not acl:
-        return []
-    cmds = [
-        f"ipsec proposal {prop_name}",
-        f"esp authentication-algorithm {auth}",
-        f"esp encryption-algorithm {enc}",
-        "quit",
-        f"ipsec policy {policy_name} 10 isakmp",
-        f"security acl {acl}",
-        f"ike peer {peer}",
-        f"proposal {prop_name}",
-        "quit",
-        "quit",
-    ]
-    return cmds
-
-
-def _build_ike(params: dict) -> List[str]:
-    prop_name = params.get("proposal_name", "").strip()
-    auth_method = params.get("auth_method", "pre-share").strip()
-    enc = params.get("enc_algorithm", "aes-256").strip()
-    auth = params.get("auth_algorithm", "sha2-256").strip()
-    dh = params.get("dh_group", "group14").strip()
-    peer_name = params.get("peer_name", "").strip()
-    peer_addr = params.get("peer_address", "").strip()
-    psk = params.get("pre_shared_key", "").strip()
-    local_addr = params.get("local_address", "").strip()
-    if not prop_name or not peer_name or not peer_addr or not psk:
-        return []
-    cmds = [
-        f"ike proposal {prop_name}",
-        f"authentication-method {auth_method}",
-        f"encryption-algorithm {enc}",
-        f"authentication-algorithm {auth}",
-        f"dh {dh}",
-        "quit",
-        f"ike peer {peer_name}",
-        f"ike-proposal {prop_name}",
-        f"pre-shared-key simple {psk}",
-        f"remote-address {peer_addr}",
-    ]
-    if local_addr:
-        cmds.append(f"local-address {local_addr}")
-    cmds.append("quit")
-    return cmds
-
-
-def _build_gre(params: dict) -> List[str]:
-    tid = params.get("tunnel_id", "0").strip()
-    source = params.get("source", "").strip()
-    dest = params.get("destination", "").strip()
-    tip = params.get("tunnel_ip", "").strip()
-    tmask = params.get("tunnel_mask", "255.255.255.0").strip()
-    proto = params.get("protocol", "gre").strip()
-    if not source or not dest or not tip:
-        return []
-    return [
-        f"interface Tunnel {tid}",
-        f"ip address {tip} {tmask}",
-        f"tunnel-protocol {proto}",
-        f"source {source}",
-        f"destination {dest}",
-        "quit",
-    ]
-
-
-def _build_vpn_instance(params: dict) -> List[str]:
-    name = params.get("name", "").strip()
-    rd = params.get("rd", "").strip()
-    rt_export = params.get("rt_export", "").strip()
-    rt_import = params.get("rt_import", "").strip()
-    intf = params.get("interface", "").strip()
-    if not name or not rd:
-        return []
-    cmds = [
-        f"ip vpn-instance {name}",
-        f"route-distinguisher {rd}",
-    ]
-    if rt_export:
-        cmds.append(f"vpn-target {rt_export} export-extcommunity")
-    if rt_import:
-        cmds.append(f"vpn-target {rt_import} import-extcommunity")
-    cmds.append("quit")
-    if intf:
-        cmds.append(f"interface {intf}")
-        cmds.append(f"ip binding vpn-instance {name}")
-        cmds.append("quit")
-    return cmds
-
-
-# Build dispatch map
-_BUILDERS = {
-    "interface_ip":  _build_interface_ip,
-    "static_route":  _build_static_route,
-    "ospf":          _build_ospf,
-    "isis":          _build_isis,
-    "bgp":           _build_bgp,
-    "rip":           _build_rip,
-    "vlan":          _build_vlan,
-    "access_port":   _build_access_port,
-    "trunk_port":    _build_trunk_port,
-    "vlanif":        _build_vlanif,
-    "stp":           _build_stp,
-    "eth_trunk":     _build_eth_trunk,
-    "lldp":          _build_lldp,
-    "dhcp":          _build_dhcp,
-    "nat":           _build_nat,
-    "vrrp":          _build_vrrp,
-    "acl":           _build_acl,
-    "ssh_user":      _build_ssh_user,
-    "telnet":        _build_telnet,
-    "snmp":          _build_snmp,
-    "ipsec":         _build_ipsec,
-    "ike":           _build_ike,
-    "gre":           _build_gre,
-    "vpn_instance":  _build_vpn_instance,
 }
 
 
@@ -974,26 +1069,25 @@ def get_templates_for_role(device_role: str) -> Dict[str, dict]:
     result = {}
     for key, tpl in CONFIG_TEMPLATES.items():
         if device_role in tpl.get("roles", []):
-            result[key] = {
-                "name": tpl["name"],
-                "icon": tpl["icon"],
-                "fields": tpl["fields"],
-                "category": tpl.get("category", ""),
-            }
+            result[key] = _public_entry(tpl)
     return result
 
 
 def get_all_templates() -> Dict[str, dict]:
     """返回所有配置模板。"""
-    return {
-        key: {
-            "name": tpl["name"],
-            "icon": tpl["icon"],
-            "fields": tpl["fields"],
-            "category": tpl.get("category", ""),
-        }
-        for key, tpl in CONFIG_TEMPLATES.items()
+    return {key: _public_entry(tpl) for key, tpl in CONFIG_TEMPLATES.items()}
+
+
+def _public_entry(tpl: dict) -> dict:
+    entry = {
+        "name": tpl["name"],
+        "icon": tpl["icon"],
+        "fields": tpl["fields"],
+        "category": tpl.get("category", ""),
     }
+    if "field_groups" in tpl:
+        entry["field_groups"] = tpl["field_groups"]
+    return entry
 
 
 def get_categories() -> Dict[str, str]:
@@ -1003,7 +1097,7 @@ def get_categories() -> Dict[str, str]:
 
 def build_config_commands(config_type: str, params: dict) -> List[str]:
     """
-    根据配置类型和参数生成配置命令列表。
+    根据配置类型和参数生成配置命令列表（声明式模板渲染）。
 
     Args:
         config_type: 配置类型标识
@@ -1012,16 +1106,23 @@ def build_config_commands(config_type: str, params: dict) -> List[str]:
     Returns:
         配置命令列表（不含 system-view / return）
     """
-    builder = _BUILDERS.get(config_type)
-    if not builder:
+    tpl = CONFIG_TEMPLATES.get(config_type)
+    if not tpl:
         return []
-    return builder(params)
+    tmpl = tpl.get("command_template")
+    if not tmpl:
+        return []
+    required = list(tpl.get("required", []))
+    required += [f["name"] for f in tpl.get("fields", []) if f.get("required")]
+    missing = [n for n in required if not params.get(n)]
+    if missing:
+        return []
+    return render_template_commands(tmpl, params or {})
 
 
 def get_verify_commands(config_type: str, params: dict) -> List[str]:
     """
     获取配置类型对应的验证命令。
-
     对于 access_port / trunk_port，验证命令需要接口名。
     """
     if config_type == "access_port" or config_type == "trunk_port":

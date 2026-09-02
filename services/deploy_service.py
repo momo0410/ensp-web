@@ -14,6 +14,8 @@ from typing import List, Optional, Any
 from .device_connector import (
     import_netmiko,
     build_conn_params,
+    command_result_from_output,
+    get_cli_error,
     safe_disconnect,
 )
 from .backup_service import backup_device_config
@@ -119,11 +121,8 @@ def _deploy_commands(
         for vcmd in verify_commands:
             try:
                 vout = connection.send_command(vcmd, read_timeout=read_timeout)
-                result["verify_outputs"].append({
-                    "command": vcmd,
-                    "output": vout,
-                    "success": True,
-                })
+                verify_result = command_result_from_output(vout)
+                result["verify_outputs"].append({"command": vcmd, **verify_result})
             except Exception as e:
                 result["verify_outputs"].append({
                     "command": vcmd,
@@ -161,6 +160,11 @@ def _inline_backup(connection: Any, device: dict) -> dict:
         "display current-configuration",
         read_timeout=30,
     )
+    cli_error = get_cli_error(config_output)
+    if cli_error:
+        raise RuntimeError(f"设备拒绝获取当前配置: {cli_error}")
+    if not config_output or len(config_output) < 10:
+        raise RuntimeError("获取到的配置为空或过短")
     from .backup_service import ensure_backup_dir, _sanitize_filename
     from datetime import datetime
 

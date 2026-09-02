@@ -97,7 +97,11 @@ def execute_single_device(
         # Step 1: 备份
         logger.info("[%s] 开始备份配置", ip)
         try:
-            backup_result = backup_device_config(device, source_ip=source_ip, socket_factory=socket_factory)
+            backup_result = backup_device_config(
+                device,
+                source_ip=source_ip,
+                management_socket_factory=socket_factory,
+            )
             if backup_result.get("success"):
                 result["backup_file"] = backup_result.get("filename")
                 logger.info("[%s] 备份完成: %s", ip, result["backup_file"])

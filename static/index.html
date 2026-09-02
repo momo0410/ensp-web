@@ -7,7 +7,7 @@
     <script>
         (function () {
             var base = window.location.protocol === "file:" ? "" : "/static/";
-            var version = "?v=20260605-sidebar-layout";
+            var version = "?v=20260607-flat-ui-2";
             var link = document.createElement("link");
             link.rel = "stylesheet";
             link.href = base + "style.css" + version;
@@ -23,7 +23,7 @@
 <header class="navbar">
     <div class="navbar-left">
         <div class="navbar-brand">
-            <span class="brand-icon">&#x2699;</span>
+            <span class="ui-icon icon-network brand-icon"></span>
             <div>
                 <h1>eNSP 管理系统</h1>
                 <span class="brand-sub">网络设备管理平台</span>
@@ -32,12 +32,12 @@
     </div>
     <div class="navbar-right">
         <button class="mobile-menu-btn" id="mobileMenuBtn" onclick="document.getElementById('sidebar').classList.toggle('mobile-open')" aria-label="打开菜单">
-            <span>&#x2630;</span>
+            <span class="ui-icon icon-menu"></span>
         </button>
         <button class="theme-toggle" id="themeToggle" onclick="toggleTheme()" aria-label="切换主题">
-            <span class="theme-icon-light">&#x2600;</span>
-            <span class="theme-icon-dark">&#x1F319;</span>
-            <span class="theme-icon-system">&#x1F310;</span>
+            <span class="theme-icon-light ui-icon icon-sun"></span>
+            <span class="theme-icon-dark ui-icon icon-moon"></span>
+            <span class="theme-icon-system ui-icon icon-monitor"></span>
         </button>
     </div>
 </header>
@@ -51,31 +51,35 @@
     <aside class="sidebar" id="sidebar">
         <nav class="sidebar-menu">
             <a class="menu-item active" data-section="section-interfaces" onclick="showSection('section-interfaces')">
-                <span class="menu-icon">&#x1F4E1;</span>
+                <span class="menu-icon ui-icon icon-network"></span>
                 <span class="menu-text">本机网卡</span>
             </a>
             <a class="menu-item" data-section="section-devices" onclick="showSection('section-devices')">
-                <span class="menu-icon">&#x1F4CB;</span>
+                <span class="menu-icon ui-icon icon-list"></span>
                 <span class="menu-text">设备列表</span>
             </a>
             <a class="menu-item" data-section="section-device-info" onclick="showSection('section-device-info')">
-                <span class="menu-icon">&#x1F4BB;</span>
+                <span class="menu-icon ui-icon icon-monitor"></span>
                 <span class="menu-text">设备详情</span>
             </a>
             <a class="menu-item" data-section="section-topology" onclick="showSection('section-topology')">
-                <span class="menu-icon">&#x1F9F0;</span>
+                <span class="menu-icon ui-icon icon-topology"></span>
                 <span class="menu-text">网络拓扑</span>
             </a>
             <a class="menu-item" data-section="section-capabilities" onclick="showSection('section-capabilities')">
-                <span class="menu-icon">&#x1F50D;</span>
+                <span class="menu-icon ui-icon icon-search"></span>
                 <span class="menu-text">能力识别</span>
             </a>
+            <a class="menu-item" data-section="section-protocol-roles" onclick="showSection('section-protocol-roles')">
+                <span class="menu-icon ui-icon icon-topology"></span>
+                <span class="menu-text">协议角色</span>
+            </a>
             <a class="menu-item" data-section="section-config-deploy" onclick="showSection('section-config-deploy')">
-                <span class="menu-icon">&#x2699;</span>
+                <span class="menu-icon ui-icon icon-settings"></span>
                 <span class="menu-text">配置下发</span>
             </a>
             <a class="menu-item" data-section="section-free-workbench" onclick="showSection('section-free-workbench')">
-                <span class="menu-icon">&#x1F6E0;</span>
+                <span class="menu-icon ui-icon icon-terminal"></span>
                 <span class="menu-text">配置工作台</span>
             </a>
         </nav>
@@ -90,7 +94,7 @@
     <!-- 区域1：本机网卡信息 -->
     <section class="card glass section-panel active" id="section-interfaces">
         <div class="card-header">
-            <h2><span class="card-icon">&#x1F4E1;</span> 本机网卡信息</h2>
+            <h2><span class="card-icon ui-icon icon-network"></span> 本机网卡信息</h2>
             <div class="card-actions">
                 <button onclick="loadInterfaces()" class="btn btn-outline" id="btn-refresh-interfaces">
                     <span class="btn-spinner hidden"></span>
@@ -129,14 +133,14 @@
     <!-- 区域2：设备列表 -->
     <section class="card glass section-panel" id="section-devices">
         <div class="card-header">
-            <h2><span class="card-icon">&#x1F4CB;</span> 设备列表</h2>
+            <h2><span class="card-icon ui-icon icon-list"></span> 设备列表</h2>
             <div class="card-actions">
                 <button onclick="discoverDevices()" class="btn btn-primary" id="btn-discover-devices">
                     <span class="btn-spinner hidden"></span>
                     发现 eNSP 设备
                 </button>
                 <button onclick="loadDevices()" class="btn btn-outline" id="btn-refresh-devices">刷新列表</button>
-                <button onclick="showAddDevice()" class="btn btn-primary">&#x2795; 添加设备</button>
+                <button onclick="showAddDevice()" class="btn btn-primary"><span class="ui-icon icon-plus"></span>添加设备</button>
             </div>
         </div>
         <div class="card-body">
@@ -172,6 +176,10 @@
                             <option value="huawei_vrp">huawei_vrp</option>
                         </select>
                     </div>
+                    <div class="form-row">
+                        <label for="add-console-port">Console 端口：</label>
+                        <input type="number" id="add-console-port" placeholder="可选，例如 2000">
+                    </div>
                 </div>
                 <div class="form-actions">
                     <button onclick="saveDeviceForm()" class="btn btn-primary" id="btn-add-device-submit">确认添加</button>
@@ -201,10 +209,10 @@
     <!-- 区域5：设备信息详情 -->
     <section class="card glass section-panel" id="section-device-info">
         <div class="card-header">
-            <h2><span class="card-icon">&#x1F4BB;</span> 设备信息详情</h2>
+            <h2><span class="card-icon ui-icon icon-monitor"></span> 设备信息详情</h2>
             <div class="card-actions">
                 <span class="device-count-badge" id="device-count-badge" hidden>0 台设备</span>
-                <button onclick="loadCollectionResults()" class="btn btn-outline btn-sm">&#x1F4CA; 刷新采集数据</button>
+                <button onclick="loadCollectionResults()" class="btn btn-outline btn-sm"><span class="ui-icon icon-refresh"></span>刷新采集数据</button>
             </div>
         </div>
         <div class="card-body">
@@ -217,11 +225,11 @@
     <!-- 区域6：拓扑关系 -->
     <section class="card glass section-panel" id="section-topology">
         <div class="card-header">
-            <h2><span class="card-icon">&#x1F9F0;</span> LLDP 拓扑关系</h2>
+            <h2><span class="card-icon ui-icon icon-topology"></span> LLDP 拓扑关系</h2>
             <div class="card-actions">
                 <button onclick="loadTopology()" class="btn btn-outline btn-sm" id="btn-refresh-topology">
                     <span class="btn-spinner hidden"></span>
-                    &#x1F517; 刷新拓扑
+                    <span class="ui-icon icon-refresh"></span>刷新拓扑
                 </button>
             </div>
         </div>
@@ -249,11 +257,11 @@
     <!-- 区域7：设备能力识别 -->
     <section class="card glass section-panel" id="section-capabilities">
         <div class="card-header">
-            <h2><span class="card-icon">&#x1F50D;</span> 设备能力识别</h2>
+            <h2><span class="card-icon ui-icon icon-search"></span> 设备能力识别</h2>
             <div class="card-actions">
                 <button onclick="probeAllCapabilities()" class="btn btn-primary" id="btn-probe-all">
                     <span class="btn-spinner hidden"></span>
-                    &#x1F50D; 识别所有设备能力
+                    <span class="ui-icon icon-search"></span>识别所有设备能力
                 </button>
             </div>
         </div>
@@ -264,12 +272,41 @@
         </div>
     </section>
 
+    <!-- 区域7.5：协议角色总览（填空式配置入口） -->
+    <section class="card glass section-panel" id="section-protocol-roles">
+        <div class="card-header">
+            <h2><span class="card-icon ui-icon icon-topology"></span> 协议角色总览</h2>
+            <div class="card-actions">
+                <button onclick="analyzeProtocolRoles()" class="btn btn-primary" id="btn-analyze-roles">
+                    <span class="btn-spinner hidden"></span>
+                    <span class="ui-icon icon-search"></span>分析协议角色
+                </button>
+            </div>
+        </div>
+        <div class="card-body">
+            <div id="protocol-roles-hint" class="info-bar info">
+                展示每台设备在各协议中的角色（VRRP Master/Backup、STP 根桥、DHCP Server/中继、NAT 类型……），
+                并提供"填空式"配置入口：点"填空配置"打开表单，系统已按设备现状预填接口/IP 等可推导项，补齐空格即可下发。
+                需先完成<a href="javascript:void(0)" onclick="showSection('section-capabilities')">能力识别</a>。
+            </div>
+            <div id="protocol-roles-results">
+                <p class="empty-state">暂无角色分析数据，请点击"分析协议角色"</p>
+            </div>
+        </div>
+    </section>
+
     <!-- 区域8：设备配置下发 -->
     <section class="card glass section-panel" id="section-config-deploy">
         <div class="card-header">
-            <h2><span class="card-icon">&#x2699;</span> 设备配置下发</h2>
+            <h2><span class="card-icon ui-icon icon-settings"></span> 设备配置下发</h2>
         </div>
         <div class="card-body">
+            <!-- 能力识别提示 -->
+            <div id="capability-hint" class="info-bar warning hidden">
+                请先执行"设备能力识别"以获取设备角色，系统将根据设备角色显示适用的配置模板。
+                <button onclick="showSection('section-capabilities')" class="btn btn-sm btn-outline" style="margin-left:10px">前往识别</button>
+            </div>
+
             <!-- 设备选择 -->
             <div class="config-device-select">
                 <label for="config-device-select">选择设备：</label>
@@ -277,8 +314,167 @@
                     <option value="">-- 请先选择设备 --</option>
                 </select>
                 <button onclick="loadBackupList()" class="btn btn-sm btn-outline" id="btn-view-backups">
-                    &#x1F4C1; 查看备份
+                    <span class="ui-icon icon-folder"></span>查看备份
                 </button>
+            </div>
+
+            <!-- Console 端口直连配置（零 IP） -->
+            <details class="console-direct-section" open>
+                <summary class="clone-config-summary">
+                    <span class="card-icon ui-icon icon-terminal"></span>
+                    通过 Console 端口直连配置（无需设备 IP）
+                    <span class="workbench-hint">设备刚加入 eNSP 尚无 IP 时，用此面板直接下发初始化命令</span>
+                </summary>
+                <div class="console-direct-body">
+                    <div class="form-row">
+                        <label for="console-port-input">Console 端口：</label>
+                        <input type="number" id="console-port-input" placeholder="例如 2000" style="width:160px">
+                        <span class="hint">eNSP 设备右键→设置查看串口号</span>
+                    </div>
+                    <div class="form-row">
+                        <label for="console-commands">配置命令（每行一条）：</label>
+                        <textarea id="console-commands" rows="8" class="protocol-input" placeholder="system-view&#10;interface GigabitEthernet0/0/0&#10;ip address 192.168.100.13 24&#10;quit&#10;stelnet server enable&#10;..."></textarea>
+                    </div>
+                    <div class="form-actions">
+                        <button onclick="previewConsoleConfig()" class="btn btn-outline" id="btn-preview-console">预览</button>
+                        <button onclick="deployConsoleConfig()" class="btn btn-primary" id="btn-deploy-console">
+                            <span class="btn-spinner hidden"></span>下发配置
+                        </button>
+                        <label><input type="checkbox" id="console-save-config"> 下发后保存配置</label>
+                    </div>
+                    <div id="console-preview-area" class="hidden">
+                        <div class="config-category-title">命令预览</div>
+                        <pre id="console-preview-content" class="config-block-pre"></pre>
+                    </div>
+                    <div id="console-result-area" class="hidden">
+                        <div id="console-result-content" class="config-result-body"></div>
+                    </div>
+                </div>
+            </details>
+
+            <!-- 命令目录（声明式表单化配置） -->
+            <details class="console-direct-section" open>
+                <summary class="clone-config-summary">
+                    <span class="card-icon ui-icon icon-list"></span>
+                    命令目录（点表单即可配置，无需写命令）
+                    <span class="workbench-hint">每条指令 = 一份表单定义；加新指令只改数据文件，不改代码</span>
+                </summary>
+                <div class="console-direct-body">
+                    <div class="catalog-toolbar">
+                        <span class="catalog-toolbar-label">? 探测目标：</span>
+                        <select id="catalog-probe-mode" onchange="onCatalogProbeModeChange()">
+                            <option value="console">Console 端口（零 IP）</option>
+                            <option value="ssh">SSH 设备</option>
+                        </select>
+                        <input type="number" id="catalog-probe-port" placeholder="端口 2000" style="width:96px">
+                        <select id="catalog-probe-ip" class="hidden">
+                            <option value="">-- 选择设备 --</option>
+                        </select>
+                        <button class="btn btn-outline btn-sm" id="btn-probe-catalog" onclick="probeCatalogSupport()">探测支持命令</button>
+                        <label class="catalog-toolbar-check"><input type="checkbox" id="catalog-probe-force"> 忽略缓存</label>
+                        <label class="catalog-toolbar-check"><input type="checkbox" id="catalog-only-supported" onchange="renderCatalogGridFromState()"> 仅显示支持</label>
+                        <span id="catalog-probe-status" class="catalog-probe-status"></span>
+                    </div>
+                    <div class="catalog-grid" id="catalog-grid">
+                        <div class="catalog-loading">加载命令目录中…</div>
+                    </div>
+
+                    <div id="catalog-form-area" class="hidden">
+                        <div class="config-category-title">
+                            <span id="catalog-form-title">指令</span>
+                            <button class="btn btn-sm btn-outline" onclick="catalogBackToList()">← 返回目录</button>
+                        </div>
+                        <div id="catalog-form-fields" class="form-grid"></div>
+
+                        <div class="form-row" style="margin-top:10px">
+                            <label>下发通道：</label>
+                            <select id="catalog-target-mode" onchange="onCatalogTargetModeChange()">
+                                <option value="console">Console 端口（零 IP）</option>
+                                <option value="ssh">SSH（已纳管设备）</option>
+                            </select>
+                        </div>
+                        <div class="form-row" id="catalog-console-row">
+                            <label for="catalog-console-port">Console 端口：</label>
+                            <input type="number" id="catalog-console-port" placeholder="例如 2000" style="width:160px">
+                        </div>
+                        <div class="form-row hidden" id="catalog-ssh-row">
+                            <label for="catalog-target-ip">目标设备：</label>
+                            <select id="catalog-target-ip">
+                                <option value="">-- 请选择设备 --</option>
+                            </select>
+                        </div>
+
+                        <div class="form-actions">
+                            <button onclick="previewCatalogConfig()" class="btn btn-outline" id="btn-preview-catalog">预览</button>
+                            <button onclick="deployCatalogConfig()" class="btn btn-primary" id="btn-deploy-catalog">
+                                <span class="btn-spinner hidden"></span>下发配置
+                            </button>
+                            <label><input type="checkbox" id="catalog-save-config"> 下发后保存配置</label>
+                        </div>
+
+                        <div id="catalog-preview-area" class="hidden">
+                            <div class="config-category-title">命令预览</div>
+                            <pre id="catalog-preview-content" class="config-block-pre"></pre>
+                        </div>
+                        <div id="catalog-result-area" class="hidden">
+                            <div id="catalog-result-content" class="config-result-body"></div>
+                        </div>
+                    </div>
+                </div>
+            </details>
+
+            <!-- 一键复制设备配置 -->
+            <div class="clone-config-section">
+                <details open>
+                    <summary class="clone-config-summary">
+                        <span class="card-icon ui-icon icon-copy"></span>
+                        一键复制当前设备配置到其他设备
+                        <span class="workbench-hint">自动适配设备名、Router ID、IS-IS NET 和冲突接口 IP；敏感管理配置默认隔离</span>
+                    </summary>
+                    <div class="clone-config-body">
+                        <div class="clone-source-line">
+                            源设备：<strong id="clone-source-device">请先在上方选择源设备</strong>
+                        </div>
+                        <div class="clone-config-grid">
+                            <div>
+                                <div class="config-category-title">目标设备（可多选）</div>
+                                <div id="clone-target-devices" class="clone-checkbox-list">
+                                    <span class="empty-hint">请先选择源设备</span>
+                                </div>
+                            </div>
+                            <div>
+                                <div class="config-category-title">复制范围</div>
+                                <div id="clone-domain-select" class="clone-checkbox-list">
+                                    <label><input type="checkbox" value="identity" checked> 设备身份</label>
+                                    <label><input type="checkbox" value="basic" checked> 基础功能</label>
+                                    <label><input type="checkbox" value="interfaces" checked> 接口配置</label>
+                                    <label><input type="checkbox" value="switching" checked> 交换配置</label>
+                                    <label><input type="checkbox" value="routing" checked> 路由协议</label>
+                                    <label><input type="checkbox" value="services" checked> 网络服务/VPN</label>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="clone-options">
+                            <label><input type="checkbox" id="clone-auto-resolve" checked> 自动解决可安全处理的冲突</label>
+                            <label><input type="checkbox" id="clone-save-config"> 下发成功后保存配置</label>
+                        </div>
+                        <div class="form-actions">
+                            <button onclick="previewCloneConfig()" class="btn btn-outline" id="btn-preview-clone">
+                                <span class="ui-icon icon-eye"></span>生成复制方案
+                            </button>
+                            <button onclick="deployCloneConfig()" class="btn btn-success" id="btn-deploy-clone" disabled>
+                                <span class="btn-spinner hidden"></span>
+                                <span class="ui-icon icon-send"></span>确认复制下发
+                            </button>
+                        </div>
+                        <div id="clone-preview-area" class="hidden">
+                            <div id="clone-preview-content"></div>
+                        </div>
+                        <div id="clone-result-area" class="hidden">
+                            <div id="clone-result-content" class="config-result-body"></div>
+                        </div>
+                    </div>
+                </details>
             </div>
 
             <!-- 配置模板选择 -->
@@ -297,11 +493,11 @@
                     </div>
                     <div class="form-actions">
                         <button onclick="previewConfig()" class="btn btn-outline" id="btn-preview-config">
-                            &#x1F441; 生成配置预览
+                            <span class="ui-icon icon-eye"></span>生成配置预览
                         </button>
                         <button onclick="deployConfig()" class="btn btn-primary" id="btn-deploy-config">
                             <span class="btn-spinner hidden"></span>
-                            &#x1F680; 确认下发
+                            <span class="ui-icon icon-send"></span>确认下发
                         </button>
                     </div>
                 </div>
@@ -337,11 +533,11 @@
             <div class="advanced-mode-section">
                 <details>
                     <summary class="advanced-mode-summary">
-                        <span class="card-icon">&#x26A0;</span> 高级命令模式（危险）
+                        <span class="card-icon ui-icon icon-alert"></span> 高级命令模式（危险）
                     </summary>
                     <div class="advanced-mode-body">
                         <div class="info-bar error">
-                            &#x26A0; 警告：高级命令模式将直接下发原始命令到设备，可能导致配置异常。下发前系统将自动备份当前配置。
+                            警告：高级命令模式将直接下发原始命令到设备，可能导致配置异常。下发前系统将自动备份当前配置。
                         </div>
                         <textarea id="raw-commands" class="command-editor" rows="8"
                             placeholder="每行一条命令，例如：&#10;system-view&#10;interface GigabitEthernet0/0/0&#10;ip address 10.0.0.1 255.255.255.0&#10;return"></textarea>
@@ -350,11 +546,11 @@
                                 <input type="checkbox" id="raw-save-config"> 下发后保存配置
                             </label>
                             <button onclick="previewRawCommands()" class="btn btn-outline">
-                                &#x1F441; 预览
+                                <span class="ui-icon icon-eye"></span>预览
                             </button>
                             <button onclick="deployRawCommands()" class="btn btn-danger" id="btn-deploy-raw">
                                 <span class="btn-spinner hidden"></span>
-                                &#x1F680; 确认下发（危险）
+                                <span class="ui-icon icon-send"></span>确认下发（危险）
                             </button>
                         </div>
                         <div id="raw-preview-area" class="hidden">
@@ -385,15 +581,15 @@
 <!-- 区域9：自由配置工作台 -->
     <section class="card glass section-panel" id="section-free-workbench">
         <div class="card-header">
-            <h2><span class="card-icon">&#x1F6E0;</span> 自由配置工作台</h2>
+            <h2><span class="card-icon ui-icon icon-terminal"></span> 自由配置工作台</h2>
             <div class="card-actions">
                 <button class="btn btn-sm btn-outline" onclick="loadScriptList()">
                     <span class="btn-spinner hidden"></span>
-                    &#x1F4C1; 加载脚本
+                    <span class="ui-icon icon-folder"></span>加载脚本
                 </button>
                 <button class="btn btn-sm btn-outline" onclick="loadTaskHistory()">
                     <span class="btn-spinner hidden"></span>
-                    &#x1F4CB; 历史记录
+                    <span class="ui-icon icon-list"></span>历史记录
                 </button>
             </div>
         </div>
@@ -429,14 +625,42 @@ lldp enable"></textarea>
             </div>
 
             <!-- 变量编辑 -->
-            <div class="workbench-vars">
-                <div class="workbench-var-panel">
-                    <div class="workbench-section-title">全局变量 (JSON)</div>
-                    <textarea id="wb-global-vars" class="var-editor" rows="6" placeholder='{"subnet_mask": "255.255.255.0"}'>{}</textarea>
+            <div class="workbench-vars-area">
+                <div class="workbench-section-title">
+                    变量配置
+                    <button class="btn btn-sm btn-outline" onclick="addVariableRow()">+ 添加变量</button>
+                    <button class="btn btn-sm btn-outline" id="btn-switch-var-mode" onclick="switchVarMode()">切换到 JSON 模式</button>
+                    <span class="workbench-hint" id="wb-var-mode-label">表格模式 — 点击变量名自动从模板提取</span>
                 </div>
-                <div class="workbench-var-panel">
-                    <div class="workbench-section-title">单设备变量 (JSON)</div>
-                    <textarea id="wb-device-vars" class="var-editor" rows="6" placeholder='{"192.168.56.11": {"hostname": "AR1", "ip_address": "192.168.56.11"}}'>{}</textarea>
+                <!-- 表格模式 -->
+                <div id="wb-var-table-container">
+                    <div class="wb-var-table-wrap">
+                        <table class="wb-var-table" id="wb-var-table">
+                            <thead>
+                                <tr id="wb-var-table-head">
+                                    <th style="width:160px">变量名</th>
+                                    <th>全局默认值</th>
+                                    <th style="width:50px">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="wb-var-table-body">
+                                <tr class="wb-var-empty-row"><td colspan="3" style="text-align:center;color:var(--text-muted)">在命令模板中使用 {{变量名}} 后，点击「提取变量」自动填充</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                <!-- JSON 模式（隐藏） -->
+                <div id="wb-json-vars-container" class="hidden">
+                    <div class="workbench-vars">
+                        <div class="workbench-var-panel">
+                            <div class="workbench-section-title">全局变量 (JSON)</div>
+                            <textarea id="wb-global-vars" class="var-editor" rows="6" placeholder='{"subnet_mask": "255.255.255.0"}'>{}</textarea>
+                        </div>
+                        <div class="workbench-var-panel">
+                            <div class="workbench-section-title">单设备变量 (JSON)</div>
+                            <textarea id="wb-device-vars" class="var-editor" rows="6" placeholder='{"192.168.56.11": {"hostname": "AR1", "ip_address": "192.168.56.11"}}'>{}</textarea>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -463,20 +687,22 @@ display current-configuration | include sysname"></textarea>
             <div class="workbench-actions">
                 <button class="btn btn-primary" id="btn-wb-preview" onclick="workbenchPreview()">
                     <span class="btn-spinner hidden"></span>
-                    &#x1F441; 生成预览
+                    <span class="ui-icon icon-eye"></span>生成预览
                 </button>
                 <button class="btn btn-success" id="btn-wb-deploy" onclick="workbenchDeploy()">
                     <span class="btn-spinner hidden"></span>
-                    &#x1F680; 确认下发
+                    <span class="ui-icon icon-send"></span>确认下发
                 </button>
                 <button class="btn btn-outline" id="btn-wb-save-script" onclick="workbenchSaveScript()">
-                    &#x1F4BE; 保存为脚本
+                    <span class="ui-icon icon-save"></span>保存为脚本
                 </button>
             </div>
 
             <!-- 预览结果 -->
             <div id="wb-preview-area" class="hidden">
                 <div class="workbench-result-title">配置预览</div>
+                <!-- 冲突检测警告 -->
+                <div id="wb-conflict-banner" class="hidden"></div>
                 <div id="wb-preview-content" class="wb-preview-content"></div>
             </div>
 
@@ -517,7 +743,7 @@ display current-configuration | include sysname"></textarea>
     <div class="modal-overlay" onclick="closeProtocolConfig()"></div>
     <div class="modal-content modal-large">
         <div class="modal-header">
-            <h3><span class="card-icon">&#x1F6E0;</span> 设备协议配置 - <span id="protocol-device-name">-</span></h3>
+            <h3><span class="card-icon ui-icon icon-settings"></span> 设备协议配置 - <span id="protocol-device-name">-</span></h3>
             <button class="modal-close" onclick="closeProtocolConfig()">&times;</button>
         </div>
         <div class="modal-body">
@@ -535,10 +761,10 @@ display current-configuration | include sysname"></textarea>
             <!-- 配置模式切换 -->
             <div class="config-mode-switch">
                 <button class="config-mode-btn active" data-mode="form" onclick="switchConfigMode('form')">
-                    <span class="mode-icon">&#x1F4CB;</span> 表单配置
+                    <span class="mode-icon ui-icon icon-list"></span> 表单配置
                 </button>
                 <button class="config-mode-btn" data-mode="command" onclick="switchConfigMode('command')">
-                    <span class="mode-icon">&#x1F4BB;</span> 命令行配置
+                    <span class="mode-icon ui-icon icon-terminal"></span> 命令行配置
                 </button>
             </div>
 
@@ -589,6 +815,170 @@ return"></textarea>
 </div>
 
 <!-- ============================================================
+     配置下发弹窗
+     ============================================================ -->
+<div id="config-deploy-modal" class="modal hidden">
+    <div class="modal-overlay" onclick="closeConfigDeployModal()"></div>
+    <div class="modal-content modal-large">
+        <div class="modal-header">
+            <h3><span class="card-icon ui-icon icon-settings"></span> <span id="config-modal-title">配置</span></h3>
+            <button class="modal-close" onclick="closeConfigDeployModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <!-- 当前配置区域 -->
+            <div class="config-sections" id="config-modal-current-area">
+                <div class="config-sections-title" onclick="toggleConfigSections(this)">
+                    <span class="config-sections-arrow">&#9654;</span>
+                    <span>当前设备配置</span>
+                    <span class="badge badge-info" id="config-modal-current-status">加载中...</span>
+                </div>
+                <div class="config-sections-body collapsible">
+                    <pre class="config-block-pre" id="config-modal-current-content">正在获取设备配置...</pre>
+                </div>
+            </div>
+
+            <!-- 配置表单 -->
+            <div class="form-grid" id="config-modal-form-fields">
+                <!-- 动态生成 -->
+            </div>
+
+            <!-- 配置预览区域 -->
+            <div id="config-modal-preview-area" class="hidden">
+                <div class="config-sections">
+                    <div class="config-sections-title" onclick="toggleConfigSections(this)">
+                        <span class="config-sections-arrow">&#9660;</span>
+                        <span>配置命令预览</span>
+                    </div>
+                    <div class="config-sections-body open">
+                        <pre class="config-block-pre" id="config-modal-preview-content"></pre>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 配置结果区域 -->
+            <div id="config-modal-result-area" class="hidden">
+                <div class="config-sections">
+                    <div class="config-sections-title" onclick="toggleConfigSections(this)">
+                        <span class="config-sections-arrow">&#9660;</span>
+                        <span>下发结果</span>
+                    </div>
+                    <div class="config-sections-body open">
+                        <div id="config-modal-result-content" class="config-result-body"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="modal-actions">
+            <label class="checkbox-label">
+                <input type="checkbox" id="config-modal-save"> 下发后保存配置
+            </label>
+            <button onclick="previewConfigModal()" class="btn btn-outline" id="btn-preview-config-modal">
+                <span class="ui-icon icon-eye"></span>生成预览
+            </button>
+            <button onclick="deployConfigModal()" class="btn btn-primary" id="btn-deploy-config-modal">
+                <span class="btn-spinner hidden"></span>
+                <span class="ui-icon icon-send"></span>确认下发
+            </button>
+            <button class="btn btn-outline" onclick="closeConfigDeployModal()">关闭</button>
+        </div>
+    </div>
+</div>
+
+<!-- ============================================================
+     AI 助教抽屉（对话 / 实验指导 / 设置）
+     ============================================================ -->
+<button id="ai-fab" class="ai-fab" onclick="toggleAIDrawer(true)" title="AI 助教">
+    <span class="ai-fab-icon">&#129302;</span><span class="ai-fab-text">AI 助教</span>
+</button>
+<div id="ai-drawer-backdrop" class="ai-drawer-backdrop hidden" onclick="toggleAIDrawer(false)"></div>
+<aside id="ai-drawer" class="ai-drawer">
+    <div class="ai-drawer-header">
+        <h3><span class="ai-fab-icon">&#129302;</span> AI 助教</h3>
+        <div class="ai-header-actions">
+            <span id="ai-mode-badge" class="cap-badge evidence">助教模式</span>
+            <button class="btn btn-sm btn-outline" onclick="switchAITab('ai-tab-settings', document.querySelectorAll('.ai-tab')[2])">设置</button>
+            <button class="btn btn-sm btn-outline" onclick="toggleAIDrawer(false)">&#10005;</button>
+        </div>
+    </div>
+    <div class="ai-tabs">
+        <button class="ai-tab active" data-ai-tab="ai-tab-chat" onclick="switchAITab('ai-tab-chat', this)">对话</button>
+        <button class="ai-tab" data-ai-tab="ai-tab-lab" onclick="switchAITab('ai-tab-lab', this)">实验指导</button>
+        <button class="ai-tab" data-ai-tab="ai-tab-settings" onclick="switchAITab('ai-tab-settings', this)">设置</button>
+    </div>
+
+    <!-- Tab: 对话 -->
+    <div id="ai-tab-chat" class="ai-tab-panel active">
+        <div class="ai-device-bar">
+            <select id="ai-device-select" onchange="onAIDeviceChanged()"></select>
+            <div class="ai-quick-actions">
+                <button class="btn btn-sm btn-outline" onclick="aiQuickTask('explain_capabilities')">能力解读</button>
+                <button class="btn btn-sm btn-outline" onclick="aiQuickTask('explain_roles')">角色讲解</button>
+                <button class="btn btn-sm btn-outline" onclick="aiQuickTask('explain_config')">解释配置</button>
+                <button class="btn btn-sm btn-outline" onclick="aiQuickTask('diagnose')">诊断报错</button>
+            </div>
+        </div>
+        <div id="ai-chat-messages" class="ai-chat-messages">
+            <div class="ai-msg assistant">你好！我是本课堂的 AI 助教。可以先在上方选择一台设备，我再结合它的实测数据回答。<br>
+            快捷键：<b>能力解读</b> = 为什么支持/不支持这些协议；<b>角色讲解</b> = 这台设备在每个协议里扮演什么；<b>解释配置</b> = 逐段讲当前配置；<b>诊断报错</b> = 分析最近一次下发失败。</div>
+        </div>
+        <div class="ai-chat-inputbar">
+            <textarea id="ai-chat-input" rows="2" placeholder="问点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
+            <button id="ai-chat-send" class="btn btn-primary" onclick="sendAIChat()">发送</button>
+        </div>
+    </div>
+
+    <!-- Tab: 实验指导 -->
+    <div id="ai-tab-lab" class="ai-tab-panel">
+        <div id="ai-lab-list">
+            <p class="empty-state">正在加载实验目录…</p>
+        </div>
+        <div id="ai-lab-active" class="hidden">
+            <div class="ai-lab-head">
+                <div>
+                    <strong id="ai-lab-name"></strong>
+                    <div class="ai-lab-goal" id="ai-lab-goal"></div>
+                </div>
+                <button class="btn btn-sm btn-outline" onclick="exitLab()">退出</button>
+            </div>
+            <div class="ai-progress-track"><div id="ai-lab-progress-bar" class="ai-progress-bar" style="width:0%"></div></div>
+            <div id="ai-lab-checks" class="ai-lab-checks"></div>
+            <div class="ai-lab-actions">
+                <button class="btn btn-sm btn-outline" onclick="refreshLabProgress()">&#8635; 重新校验（基于最近能力识别）</button>
+            </div>
+            <div id="ai-lab-hint-messages" class="ai-chat-messages small"></div>
+            <div class="ai-chat-inputbar">
+                <textarea id="ai-lab-hint-input" rows="2" placeholder="卡住了？告诉助教你卡在哪…（Enter 发送）"></textarea>
+                <button class="btn btn-primary" onclick="askLabHint()">问助教</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab: 设置 -->
+    <div id="ai-tab-settings" class="ai-tab-panel">
+        <div id="ai-settings-status" class="info-bar warning">未配置：请填写以下信息接入任意 OpenAI 兼容模型服务。</div>
+        <div class="ai-settings-form">
+            <label>API 地址（OpenAI 兼容基址）</label>
+            <input id="ai-set-base" class="protocol-input" placeholder="https://open.bigmodel.cn/api/paas/v4 或 https://api.deepseek.com/v1">
+            <label>API Key</label>
+            <input id="ai-set-key" class="protocol-input" type="password" placeholder="留空则保留已保存的 Key">
+            <label>模型名</label>
+            <input id="ai-set-model" class="protocol-input" placeholder="glm-4-flash / deepseek-chat / qwen-plus / 本地 Ollama 模型名…">
+            <label>助教模式</label>
+            <select id="ai-set-mode" class="protocol-input">
+                <option value="tutor">助教模式（引导式教学，推荐课堂使用）</option>
+                <option value="engineer">工程师模式（直接给出完整命令）</option>
+            </select>
+            <div class="ai-settings-actions">
+                <button class="btn btn-primary" onclick="saveAISettings()">保存配置</button>
+                <button class="btn btn-outline" onclick="testAIConnection()">测试连接</button>
+            </div>
+            <div id="ai-test-result"></div>
+            <p class="ai-privacy">Key 仅保存在本机 ai_config.json（已加入 .gitignore，不会提交）；对话请求由本机直接发往你配置的服务商。</p>
+        </div>
+    </div>
+</aside>
+
+<!-- ============================================================
      确认对话框
      ============================================================ -->
 <div id="custom-modal" class="modal hidden">
@@ -618,7 +1008,7 @@ return"></textarea>
 <script>
     (function () {
         var base = window.location.protocol === "file:" ? "" : "/static/";
-        var version = "?v=20260605-sidebar-layout";
+    var version = "?v=20260607-flat-ui-2";
         var script = document.createElement("script");
         script.src = base + "app.js" + version;
         document.body.appendChild(script);

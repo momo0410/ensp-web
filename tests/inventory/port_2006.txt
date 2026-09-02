@@ -1,0 +1,116 @@
+
+===== [display version] =====
+display version
+Huawei Versatile Routing Platform Software
+VRP (R) software, Version 5.160 (AP4030TN FIT V200R007C10SPC300)
+Copyright (C) 2011-2018 HUAWEI TECH CO., LTD
+Huawei AP4030TN Router uptime is 0 week, 0 day, 0 hour, 18 minutes
+
+MPU 0(Master) : uptime is 0 week, 0 day, 0 hour, 18 minutes
+NOR FLASH Memory Size: 32      M bytes
+MPU version information : 
+1. PCB      Version  : H84D2TD1T500 VER.A
+2. MAB      Version  : 0
+3. Board    Type     : AP4030TN
+4. BootROM  Version  : 0
+
+<00e0-fc4c-1430>
+===== [display current-configuration | include sysname] =====
+display current-configuration | include sysname
+<00e0-fc4c-1430>
+===== [display ip interface brief] =====
+display ip interface brief
+*down: administratively down
+^down: standby
+(l): loopback
+(s): spoofing
+(E): E-Trunk down
+The number of interface that is UP in Physical is 2
+The number of interface that is DOWN in Physical is 0
+The number of interface that is UP in Protocol is 2
+The number of interface that is DOWN in Protocol is 0
+
+Interface                         IP Address/Mask      Physical   Protocol  
+NULL0                             unassigned           up         up(s)     
+Vlanif1                           10.1.100.116/24      up         up        
+
+<00e0-fc4c-1430>
+===== [display interface brief] =====
+display interface brief
+PHY: Physical
+*down: administratively down
+(l): loopback
+(s): spoofing
+InUti/OutUti: input utility/output utility
+Interface                   PHY   Protocol  InUti OutUti   inErrors  outErrors
+Eth-Trunk0                  down  down         0%     0%          0          0
+GigabitEthernet0/0/0        up    up           0%     0%          0          0
+GigabitEthernet0/0/1        down  down         0%     0%          0          0
+NULL0                       up    up(s)        0%     0%          0          0
+Vlanif1                     up    up           --     --          0          0
+Wlan-Bridge0                down  down         --     --          0          0
+Wlan-Bridge1                down  down         --     --          0          0
+Wlan-Bridge2                down  down         --     --          0          0
+Wlan-Bridge3                down  down         --     --          0          0
+Wlan-Bridge4                down  down         --     --          0          0
+Wlan-Bridge5                down  down         --     --          0          0
+Wlan-Bridge6                down  down         --     --          0          0
+Wlan-Bridge7                down  down         --     --          0          0
+Wlan-Bridge8                down  down         --     --          0          0
+Wlan-Bridge9                down  down         --     --          0          0
+Wlan-Bridge10               down  down         --     --          0          0
+Wlan-Bridge11               down  down         --     --          0          0
+Wlan-Bridge12               down  down         --     --          0          0
+Wlan-Bridge13               down  down         --     --          0          0
+Wlan-Bridge14               down  down         --     --          0          0
+Wlan-Bridge15               down  down         --     --          0          0
+Wlan-Bridge16               down  down         --     --          0          0
+Wlan-Bridge17               down  down         --     --          0          0
+Wlan-Bridge18               down  down         --     --          0          0
+  ---- More ----
+===== [display vlan] =====
+[42D                                          [42D
+<00e0-fc4c-1430>isplay vlan
+                ^
+Error: Unrecognized command found at '^' position.
+<00e0-fc4c-1430>
+===== [display port vlan] =====
+display port vlan
+Port                        Link Type    PVID  Trunk VLAN List
+-------------------------------------------------------------------------------
+Eth-Trunk0                  hybrid       1     2-4094
+GigabitEthernet0/0/0        hybrid       1     2-4094
+GigabitEthernet0/0/1        hybrid       1     2-4094
+Wlan-Bridge0                hybrid       1     -                               
+Wlan-Bridge1                hybrid       1     -                               
+Wlan-Bridge2                hybrid       1     -                               
+Wlan-Bridge3                hybrid       1     -                               
+Wlan-Bridge4                hybrid       1     -                               
+Wlan-Bridge5                hybrid       1     -                               
+Wlan-Bridge6                hybrid       1     -                               
+Wlan-Bridge7                hybrid       1     -                               
+Wlan-Bridge8                hybrid       1     -                               
+Wlan-Bridge9                hybrid       1     -                               
+Wlan-Bridge10               hybrid       1     -                               
+Wlan-Bridge11               hybrid       1     -                               
+Wlan-Bridge12               hybrid       1     -                               
+Wlan-Bridge13               hybrid       1     -                               
+Wlan-Bridge14               hybrid       1     -                               
+Wlan-Bridge15               hybrid       1     -                               
+Wlan-Bridge16               hybrid       1     -                               
+Wlan-Bridge17               hybrid       1     -                               
+Wlan-Bridge18               hybrid       1     -                               
+Wlan-Bridge19               hybrid       1     -                               
+Wlan-Bridge20               hybrid       1     -                               
+  ---- More ----
+===== [display ap all] =====
+[42D                                          [42D
+<00e0-fc4c-1430>isplay ap all
+                ^
+Error: Unrecognized command found at '^' position.
+<00e0-fc4c-1430>
+===== [display device] =====
+display device
+                        ^
+Error: Unrecognized command found at '^' position.
+<00e0-fc4c-1430>

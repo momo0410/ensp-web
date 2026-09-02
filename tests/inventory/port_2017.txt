@@ -1,0 +1,22 @@
+
+===== [display version] =====
+
+Error: Authentication fail
+
+===== [display current-configuration | include sysname] =====
+
+===== [display ip interface brief] =====
+
+===== [display interface brief] =====
+
+===== [display vlan] =====
+
+Username:
+===== [display port vlan] =====
+display port vlan
+Password:
+===== [display ap all] =====
+
+Error: Authentication fail
+
+===== [display device] =====

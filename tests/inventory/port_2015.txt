@@ -1,0 +1,98 @@
+
+===== [display version] =====
+display version
+Huawei Versatile Routing Platform Software
+VRP (R) software, Version 5.130 (AR2200 V200R003C00)
+Copyright (C) 2011-2012 HUAWEI TECH CO., LTD
+Huawei AR2220 Router uptime is 0 week, 0 day, 0 hour, 20 minutes
+BKP 0 version information: 
+1. PCB      Version  : AR01BAK2A VER.NC
+2. If Supporting PoE : No
+3. Board    Type     : AR2220
+4. MPU Slot Quantity : 1
+5. LPU Slot Quantity : 6
+
+MPU 0(Master) : uptime is 0 week, 0 day, 0 hour, 20 minutes
+MPU version information : 
+1. PCB      Version  : AR01SRU2A VER.A
+2. MAB      Version  : 0
+3. Board    Type     : AR2220
+4. BootROM  Version  : 0
+
+
+<TQC_AR3>
+===== [display current-configuration | include sysname] =====
+display current-configuration | include sysname
+ sysname TQC_AR3
+<TQC_AR3>
+===== [display ip interface brief] =====
+display ip interface brief
+*down: administratively down
+^down: standby
+(l): loopback
+(s): spoofing
+The number of interface that is UP in Physical is 5
+The number of interface that is DOWN in Physical is 0
+The number of interface that is UP in Protocol is 5
+The number of interface that is DOWN in Protocol is 0
+
+Interface                         IP Address/Mask      Physical   Protocol  
+GigabitEthernet0/0/0              100.1.23.3/24        up         up        
+GigabitEthernet0/0/1              100.1.2.3/24         up         up        
+GigabitEthernet0/0/2              100.1.3.3/24         up         up        
+GigabitEthernet4/0/0              100.1.38.3/24        up         up        
+NULL0                             unassigned           up         up(s)     
+<TQC_AR3>
+===== [display interface brief] =====
+display interface brief
+PHY: Physical
+*down: administratively down
+(l): loopback
+(s): spoofing
+(b): BFD down
+^down: standby
+(e): ETHOAM down
+(d): Dampening Suppressed
+InUti/OutUti: input utility/output utility
+Interface                   PHY   Protocol InUti OutUti   inErrors  outErrors
+GigabitEthernet0/0/0        up    up          0%     0%          0          0
+GigabitEthernet0/0/1        up    up          0%     0%          0          0
+GigabitEthernet0/0/2        up    up          0%     0%          0          0
+GigabitEthernet4/0/0        up    up          0%     0%          0          0
+NULL0                       up    up(s)       0%     0%          0          0
+<TQC_AR3>
+===== [display vlan] =====
+display vlan
+* : management-vlan
+---------------------
+The total number of vlans is : 1
+VLAN ID Type         Status   MAC Learning Broadcast/Multicast/Unicast Property 
+--------------------------------------------------------------------------------
+1       common       enable   enable       forward   forward   forward default  
+<TQC_AR3>
+===== [display port vlan] =====
+display port vlan
+Port                    Link Type    PVID  Trunk VLAN List
+-------------------------------------------------------------------------------
+<TQC_AR3>
+===== [display ap all] =====
+display ap all
+  All AP information(Normal-0,UnNormal-0):
+  ------------------------------------------------------------------------------
+  AP    AP                    AP              Profile   AP              AP
+                                              /Region
+  ID    Type                  MAC             ID        State           Sysname
+  ------------------------------------------------------------------------------
+  ------------------------------------------------------------------------------
+  Total number: 0
+<TQC_AR3>
+===== [display device] =====
+display device
+AR2220's Device status:
+Slot  Sub Type         Online    Power      Register       Alarm      Primary
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+4     -   1GEC         Present   PowerOn    Registered     Normal     NA    
+0     -   AR2220       Present   PowerOn    Registered     Normal     Master
+7     -   PWR          Present   PowerOn    Registered     Normal     NA    
+
+<TQC_AR3>
