@@ -45,6 +45,7 @@ from services import ai_assistant
 from services.ai_assistant import AIError
 from services.access_guard import access_guard, ACCESS_ENABLED, ACCESS_TOKEN
 from services.live_check import ping_from_device
+from services import state_persist
 from services.config_builder import (
     build_preview,
     build_config_commands,
@@ -2964,6 +2965,7 @@ async def get_device_capabilities(ip: str):
     # Cache in state
     state["capability_results"] = state.get("capability_results", {})
     state["capability_results"][ip] = result
+    state_persist.save_capability_cache(state["capability_results"])
     return {"success": True, **result}
 
 
@@ -2995,6 +2997,7 @@ async def probe_all_capabilities():
                 result = future.result()
                 results.append(result)
                 state.setdefault("capability_results", {})[device["ip"]] = result
+                state_persist.save_capability_cache(state["capability_results"])
             except Exception as e:
                 logger.error("能力识别 %s 失败: %s", device["ip"], e)
                 results.append({
@@ -3292,6 +3295,7 @@ async def ai_lab_start(req: AiLabStartRequest):
         "device_ips": device_ips,
         "created_at": time.time(),
     }
+    state_persist.save_lab_sessions(_lab_sessions)
     progress = ai_assistant.evaluate_lab_progress(
         req.experiment_id, device_ips, state.get("capability_results", {}))
     return {"success": True, "session": _lab_sessions[session_id], "progress": progress}
@@ -4429,6 +4433,8 @@ def _auto_init():
                         try:
                             cap_result = future.result()
                             state["capability_results"][cap_result["ip"]] = cap_result
+                            state_persist.save_capability_cache(
+                                state["capability_results"])
                         except Exception as e:
                             device = future_map[future]
                             logger.error("能力识别 %s 失败: %s", device["ip"], e)
@@ -4566,6 +4572,13 @@ async def get_server_data():
 async def startup_event():
     """服务器启动时自动初始化"""
     logger.info("服务器启动，开始自动初始化...")
+    cached_caps = state_persist.load_capability_cache()
+    if cached_caps:
+        state.setdefault("capability_results", {}).update(cached_caps)
+        logger.info("已回灌 %d 台设备的能力识别缓存", len(cached_caps))
+    _lab_sessions.update(state_persist.load_lab_sessions())
+    if _lab_sessions:
+        logger.info("已恢复 %d 个实验会话", len(_lab_sessions))
     if ACCESS_ENABLED:
         logger.info(
             "访问令牌已启用: %s （客户端首次打开页面时需输入；"

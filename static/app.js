@@ -3940,6 +3940,33 @@ const AI_QUICK_TASKS = {
     diagnose: "",   // 运行时按最近下发结果组装
 };
 
+function _saveAIHistory() {
+    try { localStorage.setItem("ai_history", JSON.stringify(aiHistory.slice(-40))); } catch (e) {}
+}
+
+function clearAIHistory() {
+    aiHistory = [];
+    localStorage.removeItem("ai_history");
+    const box = document.getElementById("ai-chat-messages");
+    if (box) box.innerHTML = '<div class="ai-msg assistant">对话已清空。可以继续提问，或选择设备使用上方快捷动作。</div>';
+}
+
+/** 恢复上次的实验会话（服务端会话已持久化，刷新页面后可接续） */
+async function _restoreLabSession() {
+    const saved = localStorage.getItem("ai_lab_session");
+    if (!saved || aiLabSession) return;
+    try {
+        const data = await api(`/api/ai/lab/${saved}/progress`);
+        aiLabSession = { id: saved };
+        renderLabProgress(data.progress);
+        document.getElementById("ai-lab-list").classList.add("hidden");
+        document.getElementById("ai-lab-active").classList.remove("hidden");
+        aiLabMsg("assistant", "已恢复上次的实验会话，进度如上。继续配置后可点\"重新校验\"。");
+    } catch (e) {
+        localStorage.removeItem("ai_lab_session");
+    }
+}
+
 function toggleAIDrawer(open) {
     const drawer = document.getElementById("ai-drawer");
     const backdrop = document.getElementById("ai-drawer-backdrop");
@@ -3950,6 +3977,7 @@ function toggleAIDrawer(open) {
         updateAIPingSelects();
         loadAIStatus();
         if (!aiLabExperiments.length) loadLabExperiments();
+        _restoreLabSession();
         setTimeout(() => { const el = document.getElementById("ai-chat-input"); if (el) el.focus(); }, 250);
     } else {
         drawer.classList.remove("open");
@@ -4127,6 +4155,7 @@ async function sendAIChat(task, messageText) {
             history: aiHistory.slice(0, -1), stream: true,
         }, msgEl);
         aiHistory.push({ role: "assistant", content: reply });
+        _saveAIHistory();
     } catch (e) {
         msgEl.innerHTML = `<span class="cap-badge unsupported">出错</span> ${escapeHtml(e.message)}
             <br><small>若是未配置，请点右上角"设置"填入 API 地址、Key 与模型名。</small>`;
@@ -4298,6 +4327,7 @@ async function startLab(experimentId) {
             body: JSON.stringify({ experiment_id: experimentId, device_ips: [] }),
         });
         aiLabSession = data.session;
+        localStorage.setItem("ai_lab_session", aiLabSession.id);
         renderLabProgress(data.progress);
         document.getElementById("ai-lab-list").classList.add("hidden");
         document.getElementById("ai-lab-active").classList.remove("hidden");
@@ -4311,6 +4341,7 @@ async function startLab(experimentId) {
 
 function exitLab() {
     aiLabSession = null;
+    localStorage.removeItem("ai_lab_session");
     document.getElementById("ai-lab-active").classList.add("hidden");
     document.getElementById("ai-lab-list").classList.remove("hidden");
 }
@@ -4372,6 +4403,17 @@ async function askLabHint() {
 
 // Enter 发送 / Shift+Enter 换行
 document.addEventListener("DOMContentLoaded", () => {
+    try {
+        const saved = JSON.parse(localStorage.getItem("ai_history") || "[]");
+        if (Array.isArray(saved) && saved.length) {
+            aiHistory = saved;
+            for (const m of saved.slice(-8)) {
+                const el = aiPushMsg(m.role === "user" ? "user" : "assistant",
+                                     m.role === "user" ? m.content : "…");
+                if (m.role === "assistant") el.innerHTML = _aiRenderMarkdown(m.content);
+            }
+        }
+    } catch (e) { console.warn("AI 历史恢复失败", e); }
     ["ai-chat-input", "ai-lab-hint-input"].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.addEventListener("keydown", ev => {
