@@ -103,13 +103,62 @@ function initSidebar() {
  * 统一的 API 请求封装。
  * 自动处理 JSON 序列化、错误提取、非 2xx 响应。
  */
-async function api(path, options = {}) {
+// ---------- 访问令牌 ----------
+function _accessToken() {
+    return localStorage.getItem("web_access_token") || "";
+}
+
+/** 弹出令牌输入框；resolve(令牌) 或 reject(用户取消) */
+function _promptAccessToken() {
+    return new Promise((resolve, reject) => {
+        const modal = document.getElementById("access-token-modal");
+        const input = document.getElementById("access-token-input");
+        const err = document.getElementById("access-token-error");
+        const ok = document.getElementById("access-token-ok");
+        if (!modal || !input || !ok) { reject(new Error("页面缺少令牌组件")); return; }
+        err?.classList.add("hidden");
+        input.value = _accessToken();
+        modal.classList.remove("hidden");
+        setTimeout(() => input.focus(), 100);
+        const done = (token) => {
+            modal.classList.add("hidden");
+            ok.onclick = null;
+            input.onkeydown = null;
+            if (token) {
+                localStorage.setItem("web_access_token", token);
+                resolve(token);
+            } else {
+                reject(new Error("未输入访问令牌，无法调用接口"));
+            }
+        };
+        ok.onclick = () => done(input.value.trim());
+        input.onkeydown = (ev) => { if (ev.key === "Enter") done(input.value.trim()); };
+    });
+}
+
+function _showTokenError(message) {
+    const err = document.getElementById("access-token-error");
+    if (err) {
+        err.textContent = message;
+        err.classList.remove("hidden");
+    }
+}
+
+async function api(path, options = {}, _retried = false) {
     const config = {
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "X-Access-Token": _accessToken() },
         ...options,
     };
     const url = path.startsWith("http") ? path : API_ORIGIN + path;
     const resp = await fetch(url, config);
+    if (resp.status === 401 && !_retried) {
+        try {
+            await _promptAccessToken();
+        } catch (e) {
+            throw new Error("需要访问令牌：请在弹窗中输入服务端打印的令牌");
+        }
+        return api(path, options, true);
+    }
     if (!resp.ok) {
         let detail = resp.statusText;
         try {
@@ -4086,12 +4135,16 @@ async function sendAIChat(task, messageText) {
     }
 }
 
-async function _aiStreamRequest(url, body, msgEl) {
+async function _aiStreamRequest(url, body, msgEl, _retried = false) {
     const resp = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "X-Access-Token": _accessToken() },
         body: JSON.stringify(body),
     });
+    if (resp.status === 401 && !_retried) {
+        await _promptAccessToken();
+        return _aiStreamRequest(url, body, msgEl, true);
+    }
     if (!resp.ok || !resp.body) {
         const err = await resp.json().catch(() => ({}));
         throw new Error(err.detail || `HTTP ${resp.status}`);

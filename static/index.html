@@ -884,6 +884,25 @@ return"></textarea>
     </div>
 </div>
 
+<!-- 访问令牌输入 -->
+<div id="access-token-modal" class="modal hidden">
+    <div class="modal-overlay"></div>
+    <div class="modal-content modal-small">
+        <div class="modal-header">
+            <h3>访问令牌</h3>
+        </div>
+        <div class="modal-body">
+            <p>本系统可控制网络设备，需要访问令牌。请向教师获取；服务端启动日志会打印令牌（也可查看服务端项目根目录的 web_access.json）。</p>
+            <input id="access-token-input" class="protocol-input" type="password"
+                   placeholder="粘贴访问令牌" style="width:100%">
+            <div id="access-token-error" class="info-bar error hidden" style="margin-top:8px"></div>
+        </div>
+        <div class="modal-actions">
+            <button class="btn btn-primary" id="access-token-ok">确认</button>
+        </div>
+    </div>
+</div>
+
 <!-- ============================================================
      AI 助教抽屉（对话 / 实验指导 / 设置）
      ============================================================ -->

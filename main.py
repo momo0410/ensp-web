@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any
 
 import psutil
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
@@ -43,6 +43,7 @@ from services.capability_probe import probe_capabilities, probe_capabilities_par
 from services.role_detector import detect_protocol_roles
 from services import ai_assistant
 from services.ai_assistant import AIError
+from services.access_guard import access_guard, ACCESS_ENABLED, ACCESS_TOKEN
 from services.config_builder import (
     build_preview,
     build_config_commands,
@@ -188,7 +189,8 @@ EXPECTED_MANAGEMENT_IP = "192.168.100.1"
 # ---------------------------------------------------------------------------
 # FastAPI 应用
 # ---------------------------------------------------------------------------
-app = FastAPI(title="eNSP Web 管理系统", version="2.0.0")
+app = FastAPI(title="eNSP Web 管理系统", version="2.0.0",
+              dependencies=[Depends(access_guard)])
 
 # 允许从本地 HTML 直接打开页面时访问后端接口。
 app.add_middleware(
@@ -4538,6 +4540,15 @@ async def get_server_data():
 async def startup_event():
     """服务器启动时自动初始化"""
     logger.info("服务器启动，开始自动初始化...")
+    if ACCESS_ENABLED:
+        logger.info(
+            "访问令牌已启用: %s （客户端首次打开页面时需输入；"
+            "可通过 web_access.json 修改或禁用，环境变量 WEB_ACCESS_TOKEN 优先）",
+            ACCESS_TOKEN)
+    else:
+        logger.warning(
+            "访问令牌未启用——任何能访问本端口的人都可以控制设备；"
+            "仅建议纯本机回环使用")
     import threading
     thread = threading.Thread(target=_auto_init, daemon=True)
     thread.start()
