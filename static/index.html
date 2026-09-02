@@ -884,6 +884,34 @@ return"></textarea>
     </div>
 </div>
 
+<!-- 首次访问快速开始向导 -->
+<div id="quickstart-modal" class="modal hidden">
+    <div class="modal-overlay"></div>
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>&#128075; 欢迎使用 eNSP 网络设备管理系统</h3>
+        </div>
+        <div class="modal-body">
+            <ol class="qs-steps">
+                <li><b>识别网卡</b>：选择与设备同网段的管理网卡
+                    <button class="btn btn-sm btn-outline" onclick="qsGo('section-interfaces')">前往</button></li>
+                <li><b>发现设备</b>：扫描网段，Ping + SSH 双重探测入库
+                    <button class="btn btn-sm btn-outline" onclick="qsGo('section-devices')">前往</button></li>
+                <li><b>能力识别</b>：并行探测每台设备支持的协议（三态）
+                    <button class="btn btn-sm btn-outline" onclick="qsGo('section-capabilities')">前往</button></li>
+                <li><b>协议角色</b>：查看设备在各协议中的角色，点"填空配置"直接进预填表单
+                    <button class="btn btn-sm btn-outline" onclick="qsGo('section-protocol-roles')">前往</button></li>
+                <li><b>AI 助教</b>：基于设备实测数据答疑、诊断报错、指导实验
+                    <button class="btn btn-sm btn-outline" onclick="qsGo('ai')">打开</button></li>
+            </ol>
+            <p class="qs-note">遇到问题随时在 AI 助教里提问；首次调用接口时需输入服务端打印的访问令牌。</p>
+        </div>
+        <div class="modal-actions">
+            <button class="btn btn-primary" onclick="dismissQuickStart()">开始使用（不再显示）</button>
+        </div>
+    </div>
+</div>
+
 <!-- 访问令牌输入 -->
 <div id="access-token-modal" class="modal hidden">
     <div class="modal-overlay"></div>

@@ -4506,6 +4506,10 @@ async function askLabHint() {
 
 // Enter 发送 / Shift+Enter 换行
 document.addEventListener("DOMContentLoaded", () => {
+    // 首次访问显示快速开始向导
+    if (!localStorage.getItem("quickstart_done")) {
+        document.getElementById("quickstart-modal")?.classList.remove("hidden");
+    }
     try {
         const saved = JSON.parse(localStorage.getItem("ai_history") || "[]");
         if (Array.isArray(saved) && saved.length) {
@@ -4542,4 +4546,19 @@ function openAIDiagnose() {
     const msg = `请诊断这台设备最近一次配置下发失败的原因。报错信息：\n${last.error}` +
         (last.outputs ? `\n执行回显：\n${last.outputs}` : "");
     setTimeout(() => sendAIChat("diagnose", msg), 300);
+}
+
+// ---------- 快速开始向导 ----------
+function dismissQuickStart() {
+    localStorage.setItem("quickstart_done", "1");
+    document.getElementById("quickstart-modal")?.classList.add("hidden");
+}
+
+function qsGo(target) {
+    dismissQuickStart();
+    if (target === "ai") {
+        toggleAIDrawer(true);
+    } else {
+        showSection(target);
+    }
 }
