@@ -144,6 +144,11 @@ def _render_line(line: str, params: dict) -> Optional[str]:
     # 整行内联条件（如 {{?cond: text}}）在条件为假时展开为空串，应整行丢弃
     if result == "" and s.startswith("{{?"):
         return None
+    # 整行内联条件展开后剥掉前导空格：条件体里 ": text" 的那个空格是语法
+    # 分隔符，行中内联（如 ospf {{id}}{{?rid: router-id ...}}）依赖它做词间
+    # 分隔，但整行展开后它是多余的前导空白
+    if s.startswith("{{?"):
+        result = result.strip()
     return result
 
 

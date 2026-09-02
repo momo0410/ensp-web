@@ -28,6 +28,9 @@ def test_ospf_networks_are_generated_inside_area_view():
         "network 172.16.0.0 0.0.0.255",
         "quit",
         "quit",
+        # 模板新增的接口参数组：提供了 interface 字段时进入接口视图配置后退出
+        "interface GigabitEthernet0/0/0",
+        "quit",
     ]
 
 
@@ -113,54 +116,51 @@ def test_snmp_does_not_reference_an_unconfigured_acl():
     ]
 
 
-def test_legacy_protocol_generators_close_child_views():
+def test_protocol_templates_close_child_views():
+    """声明式模板取代了旧的 generate_* 函数：每个模板都必须闭合自己的视图。"""
     cases = [
-        main.generate_ospf_commands(
-            {
-                "process_id": "1",
-                "area_id": "0",
-                "network": "192.168.1.0",
-                "wildcard": "0.0.0.255",
-            }
+        build_config_commands(
+            "ospf",
+            {"process_id": "1", "area": "0",
+             "network": "192.168.1.0", "wildcard": "0.0.0.255"},
         ),
-        main.generate_bgp_commands(
-            {
-                "local_as": "65000",
-                "neighbor_ip": "192.168.1.2",
-                "neighbor_as": "65001",
-            }
+        build_config_commands(
+            "bgp",
+            {"local_as": "65000", "peer_ip": "192.168.1.2", "peer_as": "65001"},
         ),
-        main.generate_rip_commands({"version": "2", "network": "192.168.1.0"}),
-        main.generate_isis_commands(
-            {"process_id": "1", "net_entity": "49.0001.0000.0000.0001.00"}
+        build_config_commands(
+            "rip",
+            {"process_id": "1", "version": "2", "network": "192.168.1.0"},
         ),
-        main.generate_dhcp_commands(
-            {
-                "pool_name": "pool1",
-                "network": "192.168.1.0",
-                "mask": "255.255.255.0",
-            }
+        build_config_commands(
+            "dhcp",
+            {"enable": True, "pool_name": "pool1",
+             "network": "192.168.1.0", "mask": "255.255.255.0",
+             "gateway": "192.168.1.1"},
         ),
-        main.generate_acl_commands(
-            {
-                "acl_number": "3000",
-                "source": "192.168.1.0",
-                "source_wildcard": "0.0.0.255",
-            }
+        build_config_commands(
+            "acl",
+            {"acl_number": "3000", "source": "192.168.1.0"},
         ),
     ]
 
+    assert all(len(commands) > 0 for commands in cases), "模板渲染结果为空"
     assert all(commands[-1] == "quit" for commands in cases)
+    # ospf：退出 area 后还要退出进程视图
     assert cases[0][-2:] == ["quit", "quit"]
 
 
-def test_legacy_nat_uses_the_outside_interface_and_selected_acl():
-    commands = main.generate_nat_commands(
+def test_nat_outbound_uses_the_outside_interface_and_selected_acl():
+    commands = build_config_commands(
+        "nat",
         {
-            "nat_type": "easyip",
-            "outside_interface": "GigabitEthernet0/0/0",
+            "nat_type": "outbound",
+            "interface": "GigabitEthernet0/0/0",
             "acl_number": "2999",
-        }
+            # 仅 static/server 分支使用，outbound 分支不输出
+            "global_ip": "200.1.1.1",
+            "inside_ip": "192.168.1.100",
+        },
     )
 
     assert commands == [
@@ -170,26 +170,47 @@ def test_legacy_nat_uses_the_outside_interface_and_selected_acl():
     ]
 
 
-def test_legacy_ipsec_commands_have_balanced_views_and_valid_keywords():
-    commands = main.generate_ipsec_commands(
+def test_ipsec_and_ike_commands_have_balanced_views_and_valid_keywords():
+    ipsec = build_config_commands(
+        "ipsec",
         {
-            "ike_proposal": "1",
-            "encryption": "aes-128",
-            "dh_group": "2",
-            "pre_share_key": "Secret123",
+            "proposal_name": "p1",
+            "policy_name": "pol1",
+            "peer_name": "peer1",
             "acl_number": "3000",
             "local_subnet": "192.168.1.0 0.0.0.255",
             "remote_subnet": "192.168.2.0 0.0.0.255",
             "remote_ip": "203.0.113.1",
-        }
+        },
     )
 
-    assert "ike peer-peer v1" not in commands
-    assert "ike peer peer1 v1" in commands
-    assert "ike-peer peer1" in commands
-    assert "proposal default" in commands
-    assert commands[-1] == "quit"
-    assert commands.count("quit") == 5
+    assert ipsec == [
+        "ipsec proposal p1",
+        "quit",
+        "ipsec policy pol1 10 isakmp",
+        "security acl 3000",
+        "ike-peer peer1",
+        "proposal p1",
+        "quit",
+    ]
+    assert ipsec[-1] == "quit"
+    assert ipsec.count("quit") == 2
+
+    ike = build_config_commands(
+        "ike",
+        {
+            "proposal_name": "p1",
+            "peer_name": "peer1",
+            "peer_address": "203.0.113.1",
+            "pre_shared_key": "Secret123",
+        },
+    )
+
+    assert "ike proposal p1" in ike
+    assert "ike peer peer1" in ike
+    assert "remote-address 203.0.113.1" in ike
+    assert ike[-1] == "quit"
+    assert ike.count("quit") == 2
 
 
 def test_branch_ospf_solution_builds_complete_multi_view_configuration():

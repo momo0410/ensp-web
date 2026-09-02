@@ -2,6 +2,19 @@ from fastapi.testclient import TestClient
 import time
 
 import main
+from services.access_guard import ACCESS_TOKEN
+
+# 访问令牌启用后，TestClient 请求需携带令牌头
+FAKE_DEVICES = [
+    {"ip": "192.168.56.11", "name": "AR1"},
+    {"ip": "192.168.56.12", "name": "AR2"},
+]
+
+
+def _client():
+    client = TestClient(main.app)
+    client.headers["X-Access-Token"] = ACCESS_TOKEN
+    return client
 
 
 SOURCE = """
@@ -41,8 +54,9 @@ def test_clone_preview_api_builds_and_caches_deployable_plan(monkeypatch):
         }
 
     monkeypatch.setattr(main, "_load_config_for_clone", fake_load)
+    monkeypatch.setattr(main, "load_devices", lambda: FAKE_DEVICES)
     main.state["clone_previews"] = {}
-    client = TestClient(main.app)
+    client = _client()
     response = client.post(
         "/api/config/clone/preview",
         json={
@@ -94,7 +108,7 @@ def test_clone_deploy_requires_confirmed_cached_preview(monkeypatch):
         },
     )
     monkeypatch.setattr(main, "save_task_record", lambda record: None)
-    client = TestClient(main.app)
+    client = _client()
 
     denied = client.post(
         "/api/config/clone/deploy",
