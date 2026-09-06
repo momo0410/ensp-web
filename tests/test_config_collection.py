@@ -2,6 +2,8 @@ from services.device_connector import command_result_from_output, get_cli_error
 from services import backup_service
 
 import main
+import routes_config
+import routes_devices
 
 
 FULL_CONFIG = """[V200R003C00]
@@ -102,7 +104,7 @@ def test_backup_rejects_cli_error_instead_of_saving_it(monkeypatch, tmp_path):
 def test_parse_config_sections_covers_all_supported_protocol_forms():
     info = {"protocols": [], "config_sections": {}}
 
-    main._parse_config_sections(info, FULL_CONFIG)
+    routes_devices._parse_config_sections(info, FULL_CONFIG)
 
     expected = {
         "ospf", "rip", "bgp", "isis", "static", "nat", "dhcp",
@@ -125,7 +127,7 @@ def test_parse_config_sections_covers_all_supported_protocol_forms():
 
 
 def test_parse_device_info_uses_full_configuration_result():
-    info = main._parse_device_info({
+    info = routes_devices._parse_device_info({
         "display current-configuration": {
             "success": True,
             "output": FULL_CONFIG,
@@ -152,9 +154,9 @@ def test_protocol_collection_refreshes_stale_invalid_cache(monkeypatch):
         "info": {"protocols": [], "config_sections": {}},
     }
     monkeypatch.setitem(main.state["collection_results"], ip, stale)
-    monkeypatch.setattr(main, "load_devices", lambda: [{"ip": ip, "name": "R1"}])
+    monkeypatch.setattr(routes_devices, "load_devices", lambda: [{"ip": ip, "name": "R1"}])
     monkeypatch.setattr(
-        main,
+        routes_config,
         "_load_config_for_clone",
         lambda device, refresh: {
             "success": True,
@@ -165,7 +167,7 @@ def test_protocol_collection_refreshes_stale_invalid_cache(monkeypatch):
         },
     )
 
-    result = main._ensure_protocol_collection(ip)
+    result = routes_devices._ensure_protocol_collection(ip)
 
     assert result["commands"]["display current-configuration"]["output"] == FULL_CONFIG
     assert result["config_source"] == "live"
@@ -176,9 +178,9 @@ def test_protocol_collection_refreshes_stale_invalid_cache(monkeypatch):
 def test_protocol_collection_falls_back_to_labeled_backup(monkeypatch):
     ip = "192.0.2.2"
     monkeypatch.delitem(main.state["collection_results"], ip, raising=False)
-    monkeypatch.setattr(main, "load_devices", lambda: [{"ip": ip, "name": "R2"}])
+    monkeypatch.setattr(routes_devices, "load_devices", lambda: [{"ip": ip, "name": "R2"}])
     monkeypatch.setattr(
-        main,
+        routes_config,
         "_load_config_for_clone",
         lambda device, refresh: {
             "success": True,
@@ -189,7 +191,7 @@ def test_protocol_collection_falls_back_to_labeled_backup(monkeypatch):
         },
     )
 
-    result = main._ensure_protocol_collection(ip)
+    result = routes_devices._ensure_protocol_collection(ip)
 
     assert result["config_source"] == "backup"
     assert result["config_backup_file"] == "R2_latest.cfg"

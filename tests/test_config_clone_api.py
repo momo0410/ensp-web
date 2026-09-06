@@ -2,6 +2,7 @@ from fastapi.testclient import TestClient
 import time
 
 import main
+import routes_config
 from services.access_guard import ACCESS_TOKEN
 
 # 访问令牌启用后，TestClient 请求需携带令牌头
@@ -53,8 +54,8 @@ def test_clone_preview_api_builds_and_caches_deployable_plan(monkeypatch):
             "errors": [],
         }
 
-    monkeypatch.setattr(main, "_load_config_for_clone", fake_load)
-    monkeypatch.setattr(main, "load_devices", lambda: FAKE_DEVICES)
+    monkeypatch.setattr(routes_config, "_load_config_for_clone", fake_load)
+    monkeypatch.setattr(routes_config, "load_devices", lambda: FAKE_DEVICES)
     main.state["clone_previews"] = {}
     client = _client()
     response = client.post(
@@ -93,7 +94,7 @@ def test_clone_deploy_requires_confirmed_cached_preview(monkeypatch):
     }
 
     monkeypatch.setattr(
-        main,
+        routes_config,
         "execute_free_deploy",
         lambda **kwargs: {
             "success": True,
@@ -107,7 +108,7 @@ def test_clone_deploy_requires_confirmed_cached_preview(monkeypatch):
             "summary": {"total": 1, "success": 1, "failed": 0},
         },
     )
-    monkeypatch.setattr(main, "save_task_record", lambda record: None)
+    monkeypatch.setattr(routes_config, "save_task_record", lambda record: None)
     client = _client()
 
     denied = client.post(
