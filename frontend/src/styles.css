@@ -1,0 +1,183 @@
+/* 全局补充样式：等宽回显、消息气泡、细粒度排版 */
+html, body, #root { height: 100%; }
+
+.mono-pre {
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  background: var(--mantine-color-default);
+  border: 1px solid var(--mantine-color-default-border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 0;
+  max-height: 420px;
+  overflow: auto;
+}
+
+/* ---------- AI 消息 ---------- */
+.ai-msgs { display: flex; flex-direction: column; gap: 8px; overflow-y: auto; }
+.ai-msg {
+  max-width: 92%;
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-size: 13.5px;
+  line-height: 1.55;
+  word-break: break-word;
+}
+.ai-msg.user {
+  align-self: flex-end;
+  background: var(--mantine-color-blue-light);
+  color: var(--mantine-color-blue-light-color);
+  white-space: pre-wrap;
+}
+.ai-msg.assistant {
+  align-self: flex-start;
+  background: var(--mantine-color-default);
+  border: 1px solid var(--mantine-color-default-border);
+}
+.ai-msg .ai-code-wrap {
+  margin: 6px 0;
+  border: 1px solid var(--mantine-color-default-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.ai-msg .ai-code-wrap pre {
+  margin: 0;
+  padding: 8px 10px;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12.5px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  background: var(--mantine-color-dark-7);
+  color: var(--mantine-color-gray-2);
+  max-height: 300px;
+  overflow: auto;
+}
+.ai-msg .ai-code-actions {
+  display: flex;
+  gap: 6px;
+  padding: 6px;
+  border-top: 1px solid var(--mantine-color-default-border);
+}
+.ai-msg code {
+  font-family: Consolas, "Courier New", monospace;
+  background: var(--mantine-color-default);
+  border: 1px solid var(--mantine-color-default-border);
+  border-radius: 4px;
+  padding: 0 4px;
+  font-size: 12.5px;
+}
+
+/* 能力/角色徽标用小号字 */
+.cap-name { font-size: 13px; }
+
+/* 目录卡片网格 */
+.catalog-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+.catalog-card {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 12px; border-radius: 8px; cursor: pointer;
+  border: 1px solid var(--mantine-color-default-border);
+  background: var(--mantine-color-default);
+  font-size: 13px;
+}
+.catalog-card:hover { border-color: var(--mantine-color-blue-outline); }
+.catalog-card.dim { opacity: 0.45; }
+
+/* ============================================================
+   外观预设（data-skin on <html>，由 skins.js 控制）
+   ============================================================ */
+
+/* ---------- 清爽简约 clean ---------- */
+html[data-skin="clean"] body {
+  background: #f5f6fa;
+}
+html[data-skin="clean"] .mantine-Paper-root {
+  box-shadow: 0 1px 3px rgba(16, 24, 40, 0.05), 0 1px 2px rgba(16, 24, 40, 0.04);
+  border-radius: 12px;
+}
+
+/* ---------- 玻璃拟态 glass ---------- */
+html[data-skin="glass"] body {
+  background: linear-gradient(135deg, #dbeafe 0%, #e0e7ff 35%, #ede9fe 65%, #fce7f3 100%) fixed;
+}
+html[data-skin="glass"] .mantine-Paper-root {
+  background: rgba(255, 255, 255, 0.55) !important;
+  backdrop-filter: blur(16px) saturate(160%);
+  -webkit-backdrop-filter: blur(16px) saturate(160%);
+  border: 1px solid rgba(255, 255, 255, 0.65) !important;
+  box-shadow: 0 8px 32px rgba(80, 63, 205, 0.10) !important;
+}
+html[data-skin="glass"] .mantine-AppShell-header {
+  background: rgba(255, 255, 255, 0.55) !important;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.6) !important;
+}
+html[data-skin="glass"] .mantine-AppShell-navbar {
+  background: rgba(255, 255, 255, 0.45) !important;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-right: 1px solid rgba(255, 255, 255, 0.55) !important;
+}
+html[data-skin="glass"][data-mantine-color-scheme="dark"] body {
+  background: radial-gradient(1100px 500px at 15% -5%, #312e81 0%, transparent 60%),
+              radial-gradient(900px 500px at 90% 0%, #701a75 0%, transparent 55%),
+              #0f1117 fixed;
+}
+html[data-skin="glass"][data-mantine-color-scheme="dark"] .mantine-Paper-root {
+  background: rgba(38, 38, 54, 0.55) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35) !important;
+}
+html[data-skin="glass"][data-mantine-color-scheme="dark"] .mantine-AppShell-header,
+html[data-skin="glass"][data-mantine-color-scheme="dark"] .mantine-AppShell-navbar {
+  background: rgba(30, 30, 44, 0.6) !important;
+  border-color: rgba(255, 255, 255, 0.07) !important;
+}
+
+/* ---------- 深色科技 tech（自动切深色） ---------- */
+html[data-skin="tech"] body {
+  background: #0b1220;
+}
+html[data-skin="tech"] .mantine-Paper-root {
+  background: #0f172a !important;
+  border: 1px solid #1e293b !important;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45) !important;
+}
+html[data-skin="tech"] .mantine-AppShell-header,
+html[data-skin="tech"] .mantine-AppShell-navbar {
+  background: #0d1526 !important;
+  border-color: #1e293b !important;
+}
+html[data-skin="tech"] .mantine-Button-root[data-variant="filled"] {
+  box-shadow: 0 0 14px rgba(34, 211, 238, 0.30);
+}
+html[data-skin="tech"] h3 {
+  color: #a5f3fc;
+}
+
+/* ---------- 渐变活力 vibrant ---------- */
+html[data-skin="vibrant"] body {
+  background: linear-gradient(160deg, #eef2ff 0%, #fdf4ff 55%, #fff7ed 100%) fixed;
+}
+html[data-skin="vibrant"] .mantine-AppShell-header {
+  border-bottom: 3px solid transparent !important;
+  border-image: linear-gradient(90deg, #6366f1, #a855f7, #ec4899, #f59e0b) 1 !important;
+}
+html[data-skin="vibrant"] .mantine-Button-root[data-variant="filled"] {
+  background: linear-gradient(90deg, #6366f1, #a855f7 55%, #ec4899) !important;
+  border: none !important;
+  box-shadow: 0 6px 18px rgba(168, 85, 247, 0.30);
+}
+html[data-skin="vibrant"] .mantine-Paper-root {
+  border-radius: 16px !important;
+  box-shadow: 0 6px 24px rgba(99, 102, 241, 0.08) !important;
+}
+html[data-skin="vibrant"] .mantine-Paper-root:has(h3) {
+  background: linear-gradient(180deg, #ffffff, #faf5ff) !important;
+}
+html[data-skin="vibrant"][data-mantine-color-scheme="dark"] body {
+  background: linear-gradient(160deg, #1e1b4b 0%, #3b0764 55%, #431407 100%) fixed;
+}

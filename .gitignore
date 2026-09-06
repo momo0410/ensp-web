@@ -18,3 +18,5 @@ capability_cache.json
 .benchmarks/
 env/
 venv/
+frontend/node_modules/
+frontend/dist/

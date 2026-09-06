@@ -3,6 +3,11 @@
 通过 SSH 连接 eNSP 中的华为路由器/交换机，采集设备信息、识别设备能力、
 解析协议角色、以填空式表单下发配置，并内置可自行接入模型服务的 **AI 助教**。
 
+前端为 **React 19 + Mantine 9 + TypeScript**（Vite 构建，源码在 `frontend/`，
+单元测试 `cd frontend && npm test`）。
+旧版原生 JS 界面保留在 `static/`，可通过 `/legacy` 入口访问——
+**旧版已冻结**：不再新增功能，仅修复致命问题，计划在学期末移除。
+
 ---
 
 ## 项目背景
@@ -152,13 +157,26 @@ venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 4. 启动项目
+### 4. 构建前端（首次运行前执行一次；改了 frontend/ 源码后重新执行）
+
+```cmd
+cd frontend
+npm install
+npm run build
+cd ..
+```
+
+> `frontend/dist/` 已加入 .gitignore，全新克隆后必须先构建前端；
+> 未构建时后端自动回退到旧版界面（`/legacy` 同样可访问）。
+> 前端开发调试可用 `cd frontend && npm run dev`（自带 /api 代理到 127.0.0.1:8000）。
+
+### 5. 启动项目
 
 ```cmd
 uvicorn main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-### 5. 浏览器访问
+### 6. 浏览器访问
 
 ```
 http://127.0.0.1:8000
@@ -262,6 +280,17 @@ ensp-web/
 ├── web_access.json              # 访问令牌（运行时生成，已 gitignore）
 ├── capability_cache.json        # 能力识别缓存（运行时生成，已 gitignore）
 ├── backups/                     # 设备配置备份（运行时生成，已 gitignore）
+├── frontend/                    # React 19 + Mantine 9 前端（Vite 构建）
+│   ├── index.html
+│   ├── vite.config.js           # base=./；dev 模式代理 /api → 127.0.0.1:8000
+│   ├── src/
+│   │   ├── App.jsx              # 应用外壳：导航/主题/令牌弹窗/快速开始向导
+│   │   ├── store.jsx            # 全局状态（设备/采集/能力/角色/级联链）
+│   │   ├── api.js               # API 客户端（令牌注入 + 401 重试 + SSE 流式）
+│   │   ├── views/               # 八个功能视图 + 配置下发子面板
+│   │   └── components/          # AI 助教抽屉、表单字段、下发结果渲染
+│   ├── node_modules/            # （npm install 生成，已 gitignore）
+│   └── dist/                    # （npm run build 产物，已 gitignore）
 ├── services/                    # 服务模块
 │   ├── access_guard.py          # 访问令牌
 │   ├── ai_assistant.py          # AI 助教（接入/上下文/实验指导）
@@ -286,10 +315,10 @@ ensp-web/
 │   ├── smart_defaults.py        # 智能默认值
 │   ├── state_persist.py         # 能力缓存/实验会话持久化
 │   └── task_history_service.py  # 任务历史
-└── static/
-    ├── index.html               # 前端页面
-    ├── style.css                # 样式表
-    └── app.js                   # 前端 JavaScript
+└── static/                      # 旧版（原生 JS）前端，/legacy 入口可访问
+    ├── index.html               # 旧版页面
+    ├── style.css                # 旧版样式
+    └── app.js                   # 旧版 JavaScript
 ```
 
 ---
@@ -329,7 +358,7 @@ AI 上下文与实验校验、访问令牌、持久化、设备侧 ping 解析�
 ## 技术栈
 
 - **后端：** Python、FastAPI、Netmiko、psutil、filelock、httpx（AI 接入）
-- **前端：** HTML、CSS、JavaScript（原生 fetch + SSE 流式）
+- **前端：** React 19 + Mantine 9（Vite 构建）；旧版原生 JS 界面保留于 /legacy
 - **数据存储：** JSON 文件 + filelock + 内存缓存
 - **AI：** OpenAI 兼容协议，模型服务自行接入
 - **设计特性：** 玻璃态 UI、三模式主题、能力证据徽标、填空式配置

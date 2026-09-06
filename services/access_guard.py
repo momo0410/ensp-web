@@ -27,7 +27,7 @@ logger = logging.getLogger("ensp-web.access")
 TOKEN_FILE = "web_access.json"
 
 # 静态页面/健康检查不设防；其余全部要求令牌
-EXEMPT_PATHS = {"/", "/api/health"}
+EXEMPT_PATHS = {"/", "/legacy", "/api/health"}
 
 
 def _load_or_create() -> dict:
