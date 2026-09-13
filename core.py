@@ -87,210 +87,25 @@ from services.config_clone_service import (
 from services.device_connector import command_result_from_output
 
 # ---------------------------------------------------------------------------
-# 日志配置
+# 配置 / 共享状态 / 数据模型 —— 已迁移至 app/，此处仅转发保持兼容
 # ---------------------------------------------------------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
+from app.config import *  # noqa: F401,F403,E402
+from app.config import logger, BASE_DIR, DEVICES_FILE, STATIC_DIR, FRONTEND_DIST  # noqa: F401,E402
+from app.state import state, init_state, _lab_sessions  # noqa: F401,E402
+from app.models import (  # noqa: F401,E402
+    DeviceAdd,
+    InterfaceSelect,
+    ScanRequest,
+    PingRequest,
+    DeviceDiscoverRequest,
+    ProtocolConfigRequest,
+    ConfigPreviewRequest,
+    ConfigDeployRequest,
+    RawPreviewRequest,
+    RawDeployRequest,
+    ClonePreviewRequest,
+    CloneDeployRequest,
 )
-logger = logging.getLogger("ensp-web")
-
-# ---------------------------------------------------------------------------
-# 路径常量
-# ---------------------------------------------------------------------------
-BASE_DIR = Path(__file__).parent
-DEVICES_FILE = BASE_DIR / "devices.json"
-STATIC_DIR = BASE_DIR / "static"
-FRONTEND_DIST = BASE_DIR / "frontend" / "dist"  # React + Mantine 新版前端构建产物
-
-# ---------------------------------------------------------------------------
-# 华为设备默认 SSH 配置
-# ---------------------------------------------------------------------------
-HUAWEI_COMMANDS = [
-    "display version",
-    "display ip interface brief",
-    "display current-configuration",
-    "display vlan",
-    "display ip routing-table",
-    "display ospf peer",
-    "display lldp neighbor brief",
-    "display device",
-    "display cpu-usage",
-    "display memory-usage",
-]
-
-# 快速采集命令（跳过路由表、CPU、内存等非必要信息）。
-# 必须获取完整配置：旧版多管道 section 语法不被 VRP 支持，而且会遗漏接口
-# 子视图中的 OSPF/NAT/DHCP 等配置。
-HUAWEI_COMMANDS_FAST = [
-    "display version",
-    "display ip interface brief",
-    "display current-configuration",
-    "display vlan",
-    "display ospf peer",
-    "display lldp neighbor brief",
-    "display device",
-]
-
-# 大输出命令 — 使用 send_command_timing 代替 send_command，避免 prompt 等待超时
-# 这些命令在 eNSP 模拟器上输出量大，send_command 反复读 prompt 效率很低
-HEAVY_OUTPUT_COMMANDS = {
-    "display current-configuration",
-    "display current-configuration | section",
-    "display ip routing-table",
-}
-
-# 并行采集命令分组 — 按预期耗时均衡分配到 3 个 SSH 会话
-# 会话 A: 快命令（设备信息）
-PARALLEL_CMD_GROUP_A = [
-    "display version",
-    "display device",
-    "display cpu-usage",
-    "display memory-usage",
-]
-# 会话 B: 重命令（配置和路由表，大输出）
-PARALLEL_CMD_GROUP_B = [
-    "display current-configuration",
-    "display ip routing-table",
-]
-# 会话 C: 中速命令（接口/邻居表）
-PARALLEL_CMD_GROUP_C = [
-    "display ip interface brief",
-    "display vlan",
-    "display ospf peer",
-    "display lldp neighbor brief",
-]
-
-# 快速模式并行命令分组（无路由表、CPU/内存）
-PARALLEL_CMD_GROUP_A_FAST = [
-    "display version",
-    "display device",
-]
-PARALLEL_CMD_GROUP_B_FAST = [
-    "display current-configuration",
-]
-PARALLEL_CMD_GROUP_C_FAST = [
-    "display ip interface brief",
-    "display vlan",
-    "display ospf peer",
-    "display lldp neighbor brief",
-]
-
-DEFAULT_SSH_USERNAME = "admin"
-DEFAULT_SSH_PASSWORD = "Huawei@123"
-DEFAULT_DEVICE_TYPE = "huawei"
-SSH_TIMEOUT = 10
-SSH_READ_TIMEOUT = 15
-SSH_RETRY_COUNT = 2
-
-# eNSP 管理网卡识别关键词
-ENSP_KEYWORDS = ["Loopback", "VirtualBox", "Host-Only", "VMware", "KM-TEST", "NPCAP"]
-EXCLUDED_INTERFACE_KEYWORDS = ["Loopback Pseudo-Interface", "Mihomo", "Meta Tunnel"]
-EXPECTED_MANAGEMENT_IP = "192.168.100.1"
-
-# ---------------------------------------------------------------------------
-# FastAPI 应用
-# ---------------------------------------------------------------------------
-# 全局状态（单进程内存存储，不支持多 worker）
-state: Dict[str, Any] = {
-    "selected_interface": None,  # 当前选中的管理网卡
-    "subnet": None,              # 当前扫描网段
-    "collection_results": {},    # 采集结果 {ip: {...}}
-    "device_status": {},         # 增量采集状态 {ip: {"last_online": bool, "last_collect_ts": float}}
-    "clone_previews": {},        # 配置复制预览缓存 {preview_id: {...}}
-}
-
-# ---------------------------------------------------------------------------
-# 数据模型（Pydantic）
-# ---------------------------------------------------------------------------
-
-class DeviceAdd(BaseModel):
-    """手动添加设备的请求体"""
-    name: str = Field(..., min_length=1, description="设备名称")
-    ip: str = Field(..., description="管理 IP 地址")
-    username: str = Field(default=DEFAULT_SSH_USERNAME)
-    password: str = Field(default=DEFAULT_SSH_PASSWORD)
-    device_type: str = Field(default=DEFAULT_DEVICE_TYPE)
-    console_port: Optional[int] = Field(default=None, description="eNSP 本地 Console 端口号（可选，用于零 IP 直连配置）")
-
-
-class InterfaceSelect(BaseModel):
-    """选择管理网卡的请求体"""
-    name: str
-    ip: str
-    netmask: str
-
-
-class ScanRequest(BaseModel):
-    """扫描网段的请求体"""
-    subnet: str
-
-
-class PingRequest(BaseModel):
-    """Ping 测试的请求体"""
-    ip: str
-
-
-class DeviceDiscoverRequest(BaseModel):
-    """自动发现设备的请求体"""
-    subnet: Optional[str] = None
-    username: str = Field(default=DEFAULT_SSH_USERNAME)
-    password: str = Field(default=DEFAULT_SSH_PASSWORD)
-    device_type: str = Field(default=DEFAULT_DEVICE_TYPE)
-    replace: bool = True
-    ssh_identify: bool = True
-    dry_run: bool = False
-    max_workers: int = Field(default=50, ge=1, le=200)
-
-
-class ProtocolConfigRequest(BaseModel):
-    """协议配置请求体"""
-    mode: str = Field(default="form", description="配置模式: form 或 command")
-    params: dict = Field(default={}, description="表单模式下的参数")
-    commands: List[str] = Field(default=[], description="命令行模式下的命令列表")
-
-
-class ConfigPreviewRequest(BaseModel):
-    """配置预览请求体"""
-    config_type: str = Field(..., description="配置类型标识")
-    params: dict = Field(default={}, description="表单参数")
-
-
-class ConfigDeployRequest(BaseModel):
-    """配置下发请求体"""
-    config_type: str = Field(..., description="配置类型标识")
-    params: dict = Field(default={}, description="表单参数")
-    save_config: bool = Field(default=False, description="下发后是否保存配置")
-
-
-class RawPreviewRequest(BaseModel):
-    """原始命令预览请求体"""
-    commands: List[str] = Field(default=[], description="原始命令列表")
-
-
-class RawDeployRequest(BaseModel):
-    """原始命令下发请求体"""
-    commands: List[str] = Field(default=[], description="原始命令列表")
-    save_config: bool = Field(default=False, description="下发后是否保存配置")
-    confirm: bool = Field(default=False, description="二次确认标志")
-
-
-class ClonePreviewRequest(BaseModel):
-    """设备配置复制预览请求体"""
-    source_device: str
-    target_devices: List[str] = []
-    domains: List[str] = Field(default_factory=lambda: list(CLONE_DEFAULT_DOMAINS))
-    auto_resolve: bool = True
-    include_sensitive: bool = False
-    refresh_config: bool = True
-
-
-class CloneDeployRequest(BaseModel):
-    """设备配置复制下发请求体"""
-    preview_id: str
-    confirm: bool = False
-    save_config: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -2248,8 +2063,6 @@ def _finalize_interfaces(interfaces: List[dict]) -> List[dict]:
 
     return interfaces
 
-
-_lab_sessions: Dict[str, dict] = {}  # 实验会话（AI 模块与启动逻辑共享）
 
 # 供路由模块 from core import * 一次性拿到全部符号（含下划线私有助手）
 __all__ = [n for n in globals() if not n.startswith("__")]
