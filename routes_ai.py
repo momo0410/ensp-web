@@ -1,7 +1,22 @@
 """路由模块（由 main.py 机械拆分，逻辑未改动）。"""
 from fastapi import APIRouter
 
-from core import *  # noqa: F401,F403
+from fastapi import HTTPException
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+from typing import Dict
+from typing import List
+from typing import Optional
+import json
+import time
+import uuid
+
+from app.config import logger
+from app.state import state, _lab_sessions
+from domain.device_store import load_devices
+from services import ai_assistant
+from services.ai_assistant import AIError
+from services import state_persist
 
 router = APIRouter()
 
@@ -35,9 +50,6 @@ class AiLabStartRequest(BaseModel):
 class AiLabHintRequest(BaseModel):
     question: str = ""
     stream: bool = True
-
-
-_lab_sessions: Dict[str, dict] = {}
 
 
 def _device_context_for(ip: Optional[str], config_full: bool = False) -> str:

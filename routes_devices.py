@@ -1,7 +1,21 @@
 """路由模块（由 main.py 机械拆分，逻辑未改动）。"""
 from fastapi import APIRouter
 
-from core import *  # noqa: F401,F403
+from fastapi import HTTPException
+from typing import List
+import concurrent.futures
+import time
+
+from app.config import logger
+from app.models import DeviceAdd, PingRequest, ProtocolConfigRequest
+from app.state import state
+from domain.config_push import generate_delete_commands, push_config_to_device
+from domain.device_store import load_devices, save_devices
+from domain.lldp import _sync_lldp_devices
+from domain.netprobe import ping_host
+from domain.parse import _parse_config_sections, _parse_device_info  # noqa: F401  # 供测试引用
+from domain.ssh_collect import ssh_collect_device, ssh_collect_device_parallel
+from services.config_builder import build_config_commands
 
 router = APIRouter()
 

@@ -1,4 +1,24 @@
-from core import *  # noqa: F401,F403  # STATIC_DIR/state/logger 等符号已在 core
+from fastapi import Depends
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+import threading
+
+from app.config import (
+    APP_VERSION,
+    DEVICES_FILE,
+    FRONTEND_DIST,
+    HUAWEI_COMMANDS,  # noqa: F401  # 采集命令常量，供测试与外部引用
+    HUAWEI_COMMANDS_FAST,  # noqa: F401
+    PARALLEL_CMD_GROUP_B,  # noqa: F401
+    PARALLEL_CMD_GROUP_B_FAST,  # noqa: F401
+    STATIC_DIR,
+    logger,
+)
+from app.state import _lab_sessions, state
+from services.access_guard import ACCESS_ENABLED, ACCESS_TOKEN, access_guard
+from services import state_persist
 
 app = FastAPI(title="eNSP Web 管理系统", version="2.0.0",
               dependencies=[Depends(access_guard)])

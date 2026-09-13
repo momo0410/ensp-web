@@ -1,7 +1,60 @@
 """路由模块（由 main.py 机械拆分，逻辑未改动）。"""
 from fastapi import APIRouter
 
-from core import *  # noqa: F401,F403
+from datetime import datetime
+from fastapi import BackgroundTasks
+from fastapi import HTTPException
+from pathlib import Path
+from pydantic import BaseModel
+from pydantic import Field
+from typing import Any
+from typing import Dict
+from typing import List
+from typing import Optional
+import concurrent.futures
+import ipaddress
+import time
+import uuid
+
+from app.config import logger
+from app.models import (
+    CloneDeployRequest,
+    ClonePreviewRequest,
+    ConfigDeployRequest,
+    ConfigPreviewRequest,
+    RawDeployRequest,
+    RawPreviewRequest,
+)
+from app.state import state
+from domain.console import console_deploy
+from domain.device_store import load_devices
+from domain.netprobe import _create_management_socket, _management_source_ip_for
+from services.backup_service import backup_device_config, get_backup_content, list_backups
+from services.command_catalog import (
+    get_catalog_entries,
+    get_categories,
+    render_catalog_commands,
+    render_catalog_verify,
+)
+from services.command_probe import cache_key, get_cached_probe, probe_device_commands
+from services.config_builder import (
+    build_config_commands,
+    build_preview,
+    get_all_templates,
+    get_templates_for_role,
+    get_verify_commands,
+)
+from services.config_clone_service import (
+    DEFAULT_DOMAINS as CLONE_DEFAULT_DOMAINS,
+    DOMAIN_NAMES as CLONE_DOMAIN_NAMES,
+    build_clone_preview,
+)
+from services.conflict_detector import check_cross_device_conflicts
+from services.deploy_service import deploy_config, deploy_raw_commands
+from services.free_config_executor import execute_free_deploy
+from services.free_config_renderer import render_preview, validate_task
+from services.smart_defaults import generate_batch_smart_defaults, infer_wildcard_from_input
+from services.task_history_service import generate_task_id, save_task_record
 
 router = APIRouter()
 

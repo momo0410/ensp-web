@@ -1,7 +1,24 @@
 """路由模块（由 main.py 机械拆分，逻辑未改动）。"""
 from fastapi import APIRouter
 
-from core import *  # noqa: F401,F403
+from fastapi import HTTPException
+from typing import List
+from typing import Optional
+import ipaddress
+import psutil
+import socket
+import subprocess
+import threading
+
+from app.config import logger
+from app.models import DeviceDiscoverRequest, InterfaceSelect, ScanRequest
+from app.state import state
+from domain.console import diagnose_ensp_console_ports
+from domain.device_store import load_devices
+from domain.discovery import discover_devices_from_subnet
+from domain.interfaces import _finalize_interfaces, _get_windows_adapter_metadata, _pick_best_ipv4
+from domain.netprobe import scan_subnet
+from domain.topology import generate_topology
 
 router = APIRouter()
 

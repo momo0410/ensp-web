@@ -20,6 +20,7 @@ from .device_connector import (
     is_output_unsupported,
     strip_ansi,
 )
+from domain.ssh_collect import fast_send_command
 from .capability_matrix import lookup_matrix, matrix_support, matrix_note
 from .help_tree import collect_views_ssh, detect_protocols, find_first_physical_interface, parse_help_keywords
 
@@ -957,44 +958,6 @@ def probe_capabilities_parallel(
             except Exception:
                 pass
 
-        try:
-            from main import fast_send_command
-        except ImportError:
-            def fast_send_command(connection, command, timeout=10, idle_timeout=1.5):
-                channel = connection.remote_conn
-                if channel is None:
-                    raise RuntimeError("SSH channel 未建立")
-                while channel.recv_ready():
-                    channel.recv(65536)
-                channel.send(command + "\n")
-                time.sleep(0.05)
-                output = b""
-                start = time.time()
-                last_data = time.time()
-                while True:
-                    if time.time() - start > timeout:
-                        break
-                    if channel.recv_ready():
-                        chunk = channel.recv(65536)
-                        if chunk:
-                            output += chunk
-                            last_data = time.time()
-                    else:
-                        time.sleep(0.01)
-                    if len(output) > 0 and time.time() - last_data > idle_timeout:
-                        break
-                text = output.decode("utf-8", errors="replace")
-                lines = text.split("\n")
-                if lines and command.strip() in lines[0]:
-                    lines = lines[1:]
-                if lines and not lines[-1].strip():
-                    lines = lines[:-1]
-                if lines:
-                    last = lines[-1].strip()
-                    if re.match(r'^[<\[].*[>\]]$', last):
-                        lines = lines[:-1]
-                return "\n".join(lines)
-
         def _run_group(group_name, cmd_list):
             ConnectHandler, _, _ = import_netmiko()
             conn = None
@@ -1123,47 +1086,6 @@ def probe_capabilities_parallel(
         except Exception as e:
             result["errors"].append(f"SSH 连接失败: {e}")
             return result
-
-    # 读取 fast_send_command
-    try:
-        from main import fast_send_command
-    except ImportError:
-        # 回退：定义本地版本
-        def fast_send_command(connection, command, timeout=10, idle_timeout=1.5):
-            channel = connection.remote_conn
-            if channel is None:
-                raise RuntimeError("SSH channel 未建立")
-            while channel.recv_ready():
-                channel.recv(65536)
-            channel.send(command + "\n")
-            import time as _time
-            _time.sleep(0.05)
-            output = b""
-            start = _time.time()
-            last_data = _time.time()
-            while True:
-                if _time.time() - start > timeout:
-                    break
-                if channel.recv_ready():
-                    chunk = channel.recv(65536)
-                    if chunk:
-                        output += chunk
-                        last_data = _time.time()
-                else:
-                    _time.sleep(0.01)
-                if len(output) > 0 and _time.time() - last_data > idle_timeout:
-                    break
-            text = output.decode("utf-8", errors="replace")
-            lines = text.split("\n")
-            if lines and command.strip() in lines[0]:
-                lines = lines[1:]
-            if lines and not lines[-1].strip():
-                lines = lines[:-1]
-            if lines:
-                last = lines[-1].strip()
-                if re.match(r'^[<\[].*[>\]]$', last):
-                    lines = lines[:-1]
-            return "\n".join(lines)
 
     # 并行执行 3 组命令
     shared_results = {}

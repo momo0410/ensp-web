@@ -1,7 +1,21 @@
 """路由模块（由 main.py 机械拆分，逻辑未改动）。"""
 from fastapi import APIRouter
 
-from core import *  # noqa: F401,F403
+from fastapi import HTTPException
+from pydantic import BaseModel
+from typing import Optional
+import concurrent.futures
+
+from app.config import logger
+from app.state import state
+from domain.device_store import load_devices
+from domain.netprobe import _create_management_socket, _ip_sort_key, _management_source_ip_for
+from services.capability_probe import probe_capabilities, probe_capabilities_parallel
+from services.config_builder import get_all_templates, get_templates_for_role
+from services.help_tree import discover_via_ssh
+from services.live_check import ping_from_device
+from services.role_detector import detect_protocol_roles
+from services import state_persist
 
 router = APIRouter()
 

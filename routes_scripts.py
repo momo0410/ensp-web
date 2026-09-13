@@ -1,7 +1,35 @@
 """路由模块（由 main.py 机械拆分，逻辑未改动）。"""
 from fastapi import APIRouter
 
-from core import *  # noqa: F401,F403
+from pydantic import BaseModel
+from typing import Any
+from typing import Dict
+from typing import List
+import concurrent.futures
+import ipaddress
+import psutil
+import socket
+
+from app.config import DEFAULT_DEVICE_TYPE, DEFAULT_SSH_PASSWORD, DEFAULT_SSH_USERNAME, logger
+from app.state import state
+from domain.device_store import load_devices, save_devices
+from domain.interfaces import _get_windows_adapter_metadata, _pick_best_ipv4, _rank_interface
+from domain.lldp import _sync_lldp_devices
+from domain.netprobe import (
+    _create_management_socket,
+    _management_source_ip_for,
+    ping_host,
+    probe_subnet,
+)
+from domain.ssh_collect import (
+    _default_discovered_name,
+    ssh_collect_device_parallel,
+    ssh_identify_device,
+)
+from services.capability_probe import probe_capabilities_parallel
+from services.script_service import delete_script, get_script, save_script
+from services import state_persist
+from services.task_history_service import get_task, list_tasks
 
 router = APIRouter()
 

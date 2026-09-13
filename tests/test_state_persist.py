@@ -60,3 +60,38 @@ class TestLabSessions:
             t.join()
         data = state_persist.load_capability_cache()
         assert isinstance(data, dict)  # 文件未被写坏
+
+
+class TestLabSessionWiring:
+    """回归：实验会话必须全进程共享同一个 dict，否则重启恢复会写进无人读取的副本。"""
+
+    def test_routes_ai_shares_app_state_dict(self):
+        from app.state import _lab_sessions
+        import routes_ai
+        assert routes_ai._lab_sessions is _lab_sessions
+
+    def test_main_shares_app_state_dict(self):
+        from app.state import _lab_sessions
+        import main
+        assert main._lab_sessions is _lab_sessions
+
+    def test_restart_restore_is_visible_to_routes(self, tmp_files):
+        """写入 → 存盘 → 清空 → 回灌，会话应能被路由层看到。"""
+        from app.state import _lab_sessions
+        import routes_ai
+
+        routes_ai._lab_sessions["s1"] = {
+            "id": "s1", "experiment_id": "ospf_full",
+            "device_ips": ["1.1.1.1"], "created_at": 123,
+        }
+        state_persist.save_lab_sessions(routes_ai._lab_sessions)
+
+        # 模拟进程重启：清空内存后从磁盘回灌（main.startup_event 的做法）
+        _lab_sessions.clear()
+        _lab_sessions.update(state_persist.load_lab_sessions())
+
+        # 路由层必须能读到恢复出来的会话
+        assert routes_ai._lab_sessions.get("s1") is not None
+        assert routes_ai._lab_sessions["s1"]["experiment_id"] == "ospf_full"
+
+        _lab_sessions.clear()
