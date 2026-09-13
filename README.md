@@ -199,10 +199,13 @@ http://127.0.0.1:8000
 | POST | `/api/discover-devices` | 扫描管理网段并同步设备 |
 | GET | `/api/ensp-console-diagnostics` | Console 端口诊断 |
 | GET | `/api/devices` / POST / PUT / DELETE | 设备增删改查 |
+| GET | `/api/devices/{ip}/protocols` | 已配置协议列表 |
+| GET/POST/DELETE | `/api/devices/{ip}/protocols/{protocol}` | 单协议配置查询/下发/删除 |
 | POST | `/api/ping` | 管理面测试设备连通性 |
 | POST | `/api/collect/{ip}` / `/api/collect-all` | 采集设备信息（单台/并行批量） |
 | GET | `/api/topology` | LLDP 拓扑关系 |
 | GET | `/api/collection-results` | 采集结果 |
+| GET | `/api/server-data` | 一次性取回全部缓存数据（前端刷新用） |
 | GET | `/api/init-status` / POST `/api/trigger-init` | 启动自动初始化状态/触发 |
 | GET | `/api/health` | 健康检查（免令牌） |
 
@@ -272,23 +275,45 @@ http://127.0.0.1:8000
 
 ```
 ensp-web/
-├── main.py                      # FastAPI 后端主程序（全部路由）
+├── main.py                      # FastAPI 应用装配（挂载路由与静态资源，无领域逻辑）
+├── pytest.ini                   # pytest 配置（testpaths / warnings）
 ├── requirements.txt             # Python 依赖
 ├── devices.json                 # 设备列表（运行时生成，已 gitignore）
 ├── devices.example.json         # 设备列表示例
 ├── ai_config.json               # AI 接入配置（运行时生成，已 gitignore）
 ├── web_access.json              # 访问令牌（运行时生成，已 gitignore）
 ├── capability_cache.json        # 能力识别缓存（运行时生成，已 gitignore）
+├── lab_sessions.json            # AI 实验会话（运行时生成，已 gitignore）
 ├── backups/                     # 设备配置备份（运行时生成，已 gitignore）
-├── frontend/                    # React 19 + Mantine 9 前端（Vite 构建）
+├── app/                         # 应用层（无领域依赖的基础设施）
+│   ├── config.py                # 日志、路径常量、eNSP/华为设备默认参数、版本号
+│   ├── state.py                 # 共享可变状态（state / init_state / _lab_sessions）
+│   └── models.py                # Pydantic 请求模型
+├── domain/                      # 领域层（网络设备操作的纯逻辑）
+│   ├── device_store.py          # 设备列表持久化（filelock）
+│   ├── netprobe.py              # 主机探测、管理源地址选择、网段扫描
+│   ├── console.py               # eNSP 本地 Console 通道与桥接诊断
+│   ├── ssh_collect.py           # SSH 采集与 fast_send_command
+│   ├── lldp.py                  # LLDP 邻居清单与设备同步
+│   ├── discovery.py             # 网段设备发现
+│   ├── parse.py                 # display 输出解析、LLDP 解析、配置段提取
+│   ├── config_push.py           # 删除命令生成与配置推送
+│   ├── topology.py              # 拓扑生成
+│   └── interfaces.py            # Windows 网卡枚举与推荐打分
+├── routes_*.py                  # HTTP 路由（薄层：system / devices / capabilities / ai / config / scripts）
+├── frontend/                    # React 19 + Mantine 9 + TypeScript 前端（Vite 构建）
 │   ├── index.html
-│   ├── vite.config.js           # base=./；dev 模式代理 /api → 127.0.0.1:8000
+│   ├── vite.config.ts           # base=./；dev 模式代理 /api → 127.0.0.1:8000
+│   ├── tsconfig.json            # 严格模式；references 指向 tsconfig.node.json
 │   ├── src/
-│   │   ├── App.jsx              # 应用外壳：导航/主题/令牌弹窗/快速开始向导
-│   │   ├── store.jsx            # 全局状态（设备/采集/能力/角色/级联链）
-│   │   ├── api.js               # API 客户端（令牌注入 + 401 重试 + SSE 流式）
-│   │   ├── views/               # 八个功能视图 + 配置下发子面板
-│   │   └── components/          # AI 助教抽屉、表单字段、下发结果渲染
+│   │   ├── App.tsx              # 应用外壳：导航/主题/令牌弹窗/快速开始向导
+│   │   ├── store.tsx            # 全局状态（设备/采集/能力/角色/级联链）
+│   │   ├── api.ts               # API 客户端（令牌注入 + 401 重试 + SSE 流式）
+│   │   ├── types.ts             # 领域类型（镜像后端 payload）
+│   │   ├── views/               # 八个功能视图 + config/ 配置下发子面板
+│   │   ├── components/          # AI 助教抽屉、表单字段、下发结果渲染
+│   │   ├── lib/                 # 独立于 React 的纯函数（便于单测）
+│   │   └── __tests__/           # vitest 单元测试
 │   ├── node_modules/            # （npm install 生成，已 gitignore）
 │   └── dist/                    # （npm run build 产物，已 gitignore）
 ├── services/                    # 服务模块
@@ -297,13 +322,11 @@ ensp-web/
 │   ├── backup_service.py        # 配置备份
 │   ├── capability_matrix.py     # eNSP 镜像 → 协议能力矩阵
 │   ├── capability_probe.py      # 能力探测（矩阵/?树/多候选整合）
-│   ├── cli_completer.py         # CLI 补全
 │   ├── command_catalog.py       # 命令目录（字段/模板/trigger）
 │   ├── command_probe.py         # ? 探测引导（双通道）
 │   ├── config_builder.py        # 声明式模板渲染引擎 + CONFIG_TEMPLATES
 │   ├── config_clone_service.py  # 配置复制与自动冲突适配
 │   ├── conflict_detector.py     # 跨设备冲突检测
-│   ├── custom_template_service.py # 自定义模板
 │   ├── deploy_service.py        # 配置下发
 │   ├── device_connector.py      # SSH 连接管理 + ANSI 清理
 │   ├── free_config_executor.py  # 自由配置执行
@@ -315,11 +338,25 @@ ensp-web/
 │   ├── smart_defaults.py        # 智能默认值
 │   ├── state_persist.py         # 能力缓存/实验会话持久化
 │   └── task_history_service.py  # 任务历史
+├── tests/                       # 单元测试（全离线，114 项）
+│   ├── conftest.py              # sys.path 注入与共享样例
+│   └── test_*.py                # 按模块划分的测试
+├── tools/                       # 手动运维脚本（连真机，需 eNSP 在运行）
+│   ├── ensp_probe.py            # 扫描 Console 端口（只读）
+│   ├── ensp_live_probe.py       # 真机 ? 探测验证（只读）
+│   ├── ensp_live_deploy.py      # 真机下发全链路验证（会改配置）
+│   ├── d_console_verify.py      # 零配置设备 Console 初始化验证（带 mock）
+│   ├── inventory_probe.py       # 全量只读探测，产物写 tools/inventory/
+│   └── builder_verify.py        # 配置模板渲染自检
 └── static/                      # 旧版（原生 JS）前端，/legacy 入口可访问
     ├── index.html               # 旧版页面
     ├── style.css                # 旧版样式
     └── app.js                   # 旧版 JavaScript
 ```
+
+**分层约定**：`app/`（基础设施）← `domain/`（领域逻辑）← `routes_*.py`（HTTP 薄层）。
+`services/` 为内聚的服务模块，被 domain/routes 显式导入。所有模块间依赖均为显式 import，
+不使用通配符导入。
 
 ---
 
@@ -347,18 +384,24 @@ ensp-web/
 ## 测试
 
 ```cmd
-python -m pytest tests/ -v
+python -m pytest
 ```
 
 单元测试覆盖：能力矩阵、? 树解析、ANSI 清理、协议角色、填空预填、
-AI 上下文与实验校验、访问令牌、持久化、设备侧 ping 解析等（111 项，全部离线运行）。
+AI 上下文与实验校验、访问令牌、状态持久化（含实验会话重启恢复）、
+设备侧 ping 解析等（114 项，全部离线运行，不接触任何真机）。
+
+配置见 `pytest.ini`：`testpaths = tests`，仅收集 `test_*.py`。
+
+**目录约定**：`tests/` 只放离线单元测试；连真机的运维脚本在 `tools/`，
+需手动执行（多数在 `if __name__ == "__main__":` 下运行，import 无副作用）。
 
 ---
 
 ## 技术栈
 
 - **后端：** Python、FastAPI、Netmiko、psutil、filelock、httpx（AI 接入）
-- **前端：** React 19 + Mantine 9（Vite 构建）；旧版原生 JS 界面保留于 /legacy
+- **前端：** React 19 + Mantine 9 + TypeScript（Vite 构建）；旧版原生 JS 界面保留于 /legacy
 - **数据存储：** JSON 文件 + filelock + 内存缓存
 - **AI：** OpenAI 兼容协议，模型服务自行接入
 - **设计特性：** 玻璃态 UI、三模式主题、能力证据徽标、填空式配置

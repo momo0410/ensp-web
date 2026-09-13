@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# TypeScript 增量编译信息（tsc --build 生成）
+*.tsbuildinfo
