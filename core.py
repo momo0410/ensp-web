@@ -2249,9 +2249,6 @@ def _finalize_interfaces(interfaces: List[dict]) -> List[dict]:
     return interfaces
 
 
-_lab_sessions: Dict[str, dict] = {}
-
-
 _lab_sessions: Dict[str, dict] = {}  # 实验会话（AI 模块与启动逻辑共享）
 
 # 供路由模块 from core import * 一次性拿到全部符号（含下划线私有助手）

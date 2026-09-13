@@ -877,9 +877,5 @@ async def api_check_batch_conflicts(req: BatchConflictRequest):
     )
 
     return {"success": True, "conflicts": conflicts}
-async def api_list_scripts():
-    """获取脚本列表。"""
-    scripts = list_scripts()
-    return {"success": True, "scripts": scripts}
 
 
