@@ -7,7 +7,7 @@
 """
 import socket, time, os, re
 
-OUT_DIR = "tests/inventory"
+OUT_DIR = str(__import__("pathlib").Path(__file__).resolve().parent / "inventory")
 os.makedirs(OUT_DIR, exist_ok=True)
 
 PROBE_CMDS = [

@@ -1,6 +1,6 @@
 """D 验证：零配置设备经 Console 通道表单初始化（端到端）"""
 import socket, threading, time, sys, asyncio
-sys.path.insert(0, ".")
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1]))
 
 # ---- Mock VRP Console (telnet localhost) ----
 received = []
@@ -110,3 +110,6 @@ async def run():
     print("\n[DONE] Console 通道零配置设备表单初始化验证完成。")
 
 asyncio.run(run())
+
+if __name__ == "__main__":
+    asyncio.run(run())

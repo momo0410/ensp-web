@@ -29,16 +29,21 @@ def probe(port):
     except (OSError, ConnectionRefusedError):
         return None
 
-print("=== eNSP Console 端口扫描（127.0.0.1, 2000-2030）===")
-found = []
-for p in PORTS:
-    b = probe(p)
-    if b is not None:
-        txt = b.decode("gbk", "replace").replace("\r", "").replace("\n", " ")
-        found.append((p, txt.strip()[:80]))
-        print(f"  [OPEN] port {p}: {txt.strip()[:80]}")
-if not found:
-    print("  未发现任何开放端口。请确认：eNSP 已启动 / 至少一台设备已开机（右键设备->启动）")
-    print("  若设备已启动仍无端口，可能是非默认区间，请告诉我具体端口号。")
-else:
-    print(f"\n发现 {len(found)} 个在线 Console 端口。下一步可做只读 ? 探测确认设备类型。")
+def main():
+    print("=== eNSP Console 端口扫描（127.0.0.1, 2000-2030）===")
+    found = []
+    for p in PORTS:
+        b = probe(p)
+        if b is not None:
+            txt = b.decode("gbk", "replace").replace("\r", "").replace("\n", " ")
+            found.append((p, txt.strip()[:80]))
+            print(f"  [OPEN] port {p}: {txt.strip()[:80]}")
+    if not found:
+        print("  未发现任何开放端口。请确认：eNSP 已启动 / 至少一台设备已开机（右键设备->启动）")
+        print("  若设备已启动仍无端口，可能是非默认区间，请告诉我具体端口号。")
+    else:
+        print(f"\n发现 {len(found)} 个在线 Console 端口。下一步可做只读 ? 探测确认设备类型。")
+
+
+if __name__ == "__main__":
+    main()

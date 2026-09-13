@@ -6,7 +6,7 @@
 - save_config=False，仅改运行配置；清理后设备还原
 """
 import sys, asyncio
-sys.path.insert(0, ".")
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1]))
 import httpx, main
 import socket, time
 from services.command_probe import _console_recv_all, _console_send
@@ -70,3 +70,6 @@ async def run():
     print("\n[DONE] 真机下发全链路验证完成，设备已清理。")
 
 asyncio.run(run())
+
+if __name__ == "__main__":
+    asyncio.run(run())

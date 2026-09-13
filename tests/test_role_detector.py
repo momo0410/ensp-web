@@ -7,7 +7,6 @@ test_role_detector.py - 协议角色解析单元测试
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from services.role_detector import (
     detect_protocol_roles, _interface_blocks, _best_router_id,

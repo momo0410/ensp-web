@@ -5,7 +5,6 @@ test_live_check.py - 设备侧 ping 解析单元测试（真实 VRP 回显样例
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from services.live_check import parse_ping_output, ping_from_device
 
