@@ -1,7 +1,7 @@
 """
 deploy_service.py - 配置下发模块
 =================================
-通过 SSH 向设备下发配置命令，支持：
+通过本地 Console 向设备下发配置命令，支持：
 - 模板配置下发
 - 原始命令下发
 - 可选保存配置
@@ -12,7 +12,7 @@ import logging
 from typing import List, Optional, Any
 
 from .device_connector import (
-    import_netmiko,
+    import_console,
     build_conn_params,
     command_result_from_output,
     get_cli_error,
@@ -22,14 +22,11 @@ from .backup_service import backup_device_config
 
 logger = logging.getLogger("ensp-web.deploy")
 
-
 def _deploy_commands(
     device: dict,
     commands: List[str],
     verify_commands: List[str],
     save_config: bool = False,
-    source_ip: Optional[str] = None,
-    management_socket_factory=None,
     timeout: int = 10,
     read_timeout: int = 15,
 ) -> dict:
@@ -41,9 +38,7 @@ def _deploy_commands(
         commands: 要下发的配置命令列表
         verify_commands: 下发后执行的验证命令
         save_config: 是否保存配置
-        source_ip: 管理源 IP
-        management_socket_factory: socket 工厂
-        timeout: SSH 超时
+        timeout: 连接超时
         read_timeout: 命令读取超时
 
     Returns:
@@ -63,18 +58,12 @@ def _deploy_commands(
     }
 
     connection = None
-    ssh_sock = None
 
     try:
-        ConnectHandler, _, _ = import_netmiko()
+        ConnectHandler, _, _ = import_console()
         params = build_conn_params(device, timeout=timeout)
 
-        if source_ip and management_socket_factory:
-            ssh_sock = management_socket_factory(ip, 22, timeout=timeout)
-            params["sock"] = ssh_sock
-
         connection = ConnectHandler(**params)
-        ssh_sock = None
 
         # Auto backup before deploy
         try:
@@ -145,20 +134,19 @@ def _deploy_commands(
         logger.error("[%s] deploy failed: %s", ip, e)
     finally:
         safe_disconnect(connection)
-        if ssh_sock:
-            try:
-                ssh_sock.close()
-            except OSError:
-                pass
 
     return result
 
-
 def _inline_backup(connection: Any, device: dict) -> dict:
-    """使用已有连接执行备份。"""
+    """使用已有连接执行备份。
+
+    read_timeout 给到 90s：`display current-configuration` 在交换机/防火墙上
+    输出量很大（24 个接口 + 各协议段），而 eNSP 镜像的 Console 是逐字符回显的，
+    30s 经常读不完；读不完会让本次下发整体失败，代价远多于多等一会。
+    """
     config_output = connection.send_command(
         "display current-configuration",
-        read_timeout=30,
+        read_timeout=90,
     )
     cli_error = get_cli_error(config_output)
     if cli_error:
@@ -172,13 +160,13 @@ def _inline_backup(connection: Any, device: dict) -> dict:
     ip = device["ip"]
     now = datetime.now()
     safe_name = _sanitize_filename(hostname)
-    filename = f"{safe_name}_{ip}_{now.strftime('%Y%m%d_%H%M%S')}.cfg"
+    safe_ip = _sanitize_filename(ip)
+    filename = f"{safe_name}_{safe_ip}_{now.strftime('%Y%m%d_%H%M%S')}.cfg"
     filepath = ensure_backup_dir() / filename
     filepath.write_text(config_output, encoding="utf-8")
 
     logger.info("[%s] pre-deploy backup: %s", ip, filename)
     return {"filename": filename, "filepath": str(filepath)}
-
 
 def _save_device_config(connection: Any) -> str:
     """
@@ -200,7 +188,6 @@ def _save_device_config(connection: Any) -> str:
     except Exception as e:
         return f"save_failed: {e}"
 
-
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -210,8 +197,6 @@ def deploy_config(
     commands: List[str],
     verify_commands: List[str] = None,
     save_config: bool = False,
-    source_ip: Optional[str] = None,
-    management_socket_factory=None,
     timeout: int = 10,
 ) -> dict:
     """
@@ -222,8 +207,6 @@ def deploy_config(
         commands: 配置命令列表
         verify_commands: 验证命令列表
         save_config: 是否保存
-        source_ip: 管理源 IP
-        management_socket_factory: socket 工厂
         timeout: 超时
 
     Returns:
@@ -237,18 +220,13 @@ def deploy_config(
         commands=commands,
         verify_commands=verify_commands or [],
         save_config=save_config,
-        source_ip=source_ip,
-        management_socket_factory=management_socket_factory,
         timeout=timeout,
     )
-
 
 def deploy_raw_commands(
     device: dict,
     raw_commands: List[str],
     save_config: bool = False,
-    source_ip: Optional[str] = None,
-    management_socket_factory=None,
     timeout: int = 10,
 ) -> dict:
     """
@@ -263,8 +241,6 @@ def deploy_raw_commands(
         device: 设备字典
         raw_commands: 原始命令列表
         save_config: 是否保存
-        source_ip: 管理源 IP
-        management_socket_factory: socket 工厂
         timeout: 超时
 
     Returns:
@@ -278,8 +254,6 @@ def deploy_raw_commands(
         commands=raw_commands,
         verify_commands=[],
         save_config=save_config,
-        source_ip=source_ip,
-        management_socket_factory=management_socket_factory,
         timeout=timeout,
     )
     result["raw_mode"] = True

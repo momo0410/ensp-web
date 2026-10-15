@@ -71,16 +71,15 @@ class TestTargetValidation:
                 return self
 
         from services import live_check
-        import netmiko
 
         class FakeHandler(FakeConn):
             def __init__(self, **kw):
                 pass
 
         monkeypatch.setattr(live_check, "_connect", None, raising=False)
-        # 直接打桩 import_netmiko
+        # 直接打桩 import_console
         monkeypatch.setattr(
-            "services.device_connector.import_netmiko",
+            "services.device_connector.import_console",
             lambda: (FakeHandler, Exception, Exception),
         )
         r = ping_from_device({"ip": "1.1.1.1"}, "10.0.0.1", count=999)

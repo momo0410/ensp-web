@@ -1,22 +1,16 @@
 """
 eNSP 本地 Console（telnet 127.0.0.1）通道。
 
-用于设备还没有管理 IP 时直连 Console 端口完成初始化配置、
-以及诊断 Cloud 桥接状态。与 SSH 通道相互独立。
+本系统唯一的设备接入方式：设备没有管理 IP，直接通过
+127.0.0.1:<console_port> 与设备串口会话交互。
 """
 
-import concurrent.futures
-import ipaddress
 import re
 import socket
 import time
 from typing import List, Optional
 
-import psutil
-
 from app.config import logger
-from app.state import state
-from domain.netprobe import ping_host, ssh_service_open
 from domain.parse import _regex_find
 
 
@@ -63,165 +57,6 @@ def _strip_command_echo(text: str) -> str:
     cleaned = re.sub(r"[\b\r]+", "\n", cleaned)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     return cleaned.strip()
-
-
-def _console_probe_port(port: int) -> Optional[dict]:
-    sock = None
-    try:
-        sock = socket.create_connection(("127.0.0.1", port), timeout=0.6)
-        sock.settimeout(0.8)
-        sock.sendall(b"\r")
-        time.sleep(0.2)
-        prompt_text = _console_recv_all(sock, max_wait=1.0)
-        name = _parse_console_prompt(prompt_text)
-        if not name:
-            return None
-
-        outputs = {
-            "display ip interface brief": _console_send_command(sock, "display ip interface brief", max_wait=5.0),
-            "display current-configuration | include sysname|stelnet|ssh|local-user|user-interface|authentication-mode|protocol inbound|ip address": _console_send_command(
-                sock,
-                "display current-configuration | include sysname|stelnet|ssh|local-user|user-interface|authentication-mode|protocol inbound|ip address",
-                max_wait=5.0,
-            ),
-            "display ssh server status": _console_send_command(sock, "display ssh server status", max_wait=4.0),
-            "display arp": _console_send_command(sock, "display arp", max_wait=5.0),
-        }
-
-        ip_brief = outputs["display ip interface brief"]
-        mgmt_ips = re.findall(r"\b(\d+\.\d+\.\d+\.\d+)/\d+\b", ip_brief)
-        config_text = outputs[
-            "display current-configuration | include sysname|stelnet|ssh|local-user|user-interface|authentication-mode|protocol inbound|ip address"
-        ]
-        ssh_status = outputs["display ssh server status"]
-        ssh_configured = all(
-            marker in (config_text + "\n" + ssh_status)
-            for marker in [
-                "stelnet server enable",
-                "local-user admin service-type ssh",
-                "authentication-mode aaa",
-                "protocol inbound ssh",
-            ]
-        )
-
-        selected_ip = (state.get("selected_interface") or {}).get("ip")
-        can_ping_host = None
-        ping_output = ""
-        if selected_ip and mgmt_ips:
-            ping_output = _console_send_command(sock, f"ping -c 1 {selected_ip}", max_wait=5.0)
-            can_ping_host = " 0.00% packet loss" in ping_output or " 0% packet loss" in ping_output
-            outputs[f"ping -c 1 {selected_ip}"] = ping_output
-
-        host_checks = []
-        for ip in mgmt_ips:
-            host_checks.append({
-                "ip": ip,
-                "ping": ping_host(ip, timeout=1.5),
-                "ssh_service": ssh_service_open(ip, timeout=1.5),
-            })
-
-        return {
-            "port": port,
-            "name": name,
-            "mgmt_ips": mgmt_ips,
-            "ssh_configured": ssh_configured,
-            "can_ping_selected_interface": can_ping_host,
-            "host_checks": host_checks,
-            "summary": {
-                "ssh_server_enabled": "Stelnet server                      :Enable" in ssh_status or "stelnet server enable" in config_text,
-                "admin_ssh_enabled": "local-user admin service-type ssh" in config_text,
-                "vty_ssh_only": "protocol inbound ssh" in config_text,
-                "host_ping_output": _strip_command_echo(ping_output)[:600] if ping_output else "",
-            },
-            "outputs": {cmd: _strip_command_echo(out)[-2000:] for cmd, out in outputs.items()},
-        }
-    except OSError:
-        return None
-    except Exception as e:
-        logger.debug("探测 console 端口 %s 失败: %s", port, e)
-        return None
-    finally:
-        if sock:
-            try:
-                sock.close()
-            except OSError:
-                pass
-
-
-def _list_listening_console_ports(start_port: int = 2000, end_port: int = 2050) -> List[int]:
-    ports: set[int] = set()
-    try:
-        for conn in psutil.net_connections(kind="tcp"):
-            if conn.status != psutil.CONN_LISTEN or not conn.laddr:
-                continue
-            port = conn.laddr.port
-            if start_port <= port <= end_port:
-                ports.add(port)
-    except Exception as e:
-        logger.debug("读取本地监听端口失败，回退到范围扫描: %s", e)
-
-    if ports:
-        return sorted(ports)
-    return list(range(start_port, end_port + 1))
-
-
-def diagnose_ensp_console_ports(start_port: int = 2000, end_port: int = 2050) -> dict:
-    """通过 eNSP 本地 console 端口诊断已打开设备与管理网卡连通性。"""
-    ports = _list_listening_console_ports(start_port, end_port)
-    devices = []
-    if ports:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(ports), 10)) as executor:
-            future_map = {executor.submit(_console_probe_port, port): port for port in ports}
-            for future in concurrent.futures.as_completed(future_map):
-                try:
-                    device = future.result()
-                    if device:
-                        devices.append(device)
-                except Exception as e:
-                    logger.debug("console 端口 %s 诊断失败: %s", future_map[future], e)
-    devices.sort(key=lambda item: item["port"])
-
-    selected = state.get("selected_interface")
-    subnet = state.get("subnet")
-    cloud_issue_devices = []
-    if subnet:
-        try:
-            network = ipaddress.IPv4Network(subnet, strict=False)
-        except ValueError:
-            network = None
-        if network:
-            for device in devices:
-                in_subnet = [
-                    ip for ip in device["mgmt_ips"]
-                    if ipaddress.IPv4Address(ip) in network
-                ]
-                if not in_subnet:
-                    continue
-                host_unreachable = all(
-                    not check["ping"] and not check["ssh_service"]
-                    for check in device["host_checks"]
-                    if check["ip"] in in_subnet
-                )
-                device_cannot_ping_host = device.get("can_ping_selected_interface") is False
-                if device["ssh_configured"] and (host_unreachable or device_cannot_ping_host):
-                    cloud_issue_devices.append({
-                        "name": device["name"],
-                        "port": device["port"],
-                        "mgmt_ips": in_subnet,
-                    })
-
-    return {
-        "selected_interface": selected,
-        "subnet": subnet,
-        "console_devices": devices,
-        "cloud_bridge_issue": bool(cloud_issue_devices),
-        "cloud_issue_devices": cloud_issue_devices,
-        "recommendation": (
-            "Console 可见设备且 SSH 已配置，但宿主机与设备管理 IP 不互通；请检查 eNSP Cloud 的 UDP/网卡映射，"
-            "确保 Cloud 绑定 VirtualBox Host-Only Network，并建立 UDP 端口到网卡的双向映射。"
-            if cloud_issue_devices else ""
-        ),
-    }
 
 
 def console_deploy(

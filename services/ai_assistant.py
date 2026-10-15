@@ -175,6 +175,54 @@ def chat_once(messages: List[dict], cfg: Optional[Dict[str, Any]] = None,
         raise AIError(f"模型响应格式异常: {e}")
 
 
+def chat_message(messages: List[dict], cfg: Optional[Dict[str, Any]] = None,
+                 tools: Optional[List[dict]] = None,
+                 max_tokens: int = 2048) -> Dict[str, Any]:
+    """取回模型响应的**完整 message 对象**（含 tool_calls），供 Agent 循环使用。
+
+    与 chat_once 的区别：chat_once 只返回 content 文本，丢掉 function calling
+    的 tool_calls 字段。Agent 需要拿到 tool_calls 才能决定下一步调什么工具。
+
+    返回 ``{"content": str, "tool_calls": [...]}``。
+    """
+    cfg = cfg or load_config()
+    if not is_configured(cfg):
+        raise AIError("AI 尚未配置：请先在设置里填写 API 地址、Key 和模型名")
+    payload: Dict[str, Any] = {
+        "model": cfg["model"],
+        "messages": messages,
+        "stream": False,
+        "temperature": cfg.get("temperature", 0.6),
+        "max_tokens": max_tokens,
+    }
+    if tools:
+        payload["tools"] = tools
+        payload["tool_choice"] = "auto"
+    try:
+        with httpx.Client(timeout=90) as client:
+            resp = client.post(_endpoint(cfg), headers=_headers(cfg), json=payload)
+    except httpx.HTTPError as e:
+        raise AIError(f"请求模型服务失败: {e}")
+    if resp.status_code != 200:
+        detail = resp.text[:300]
+        try:
+            err = resp.json().get("error", {})
+            detail = err.get("message", detail) if isinstance(err, dict) else detail
+        except Exception:
+            pass
+        raise AIError(f"模型服务返回 HTTP {resp.status_code}: {detail}")
+    try:
+        message = resp.json()["choices"][0]["message"]
+    except (KeyError, IndexError, ValueError) as e:
+        raise AIError(f"模型响应格式异常: {e}")
+    if not isinstance(message, dict):
+        raise AIError(f"模型响应格式异常: message 不是对象（{type(message).__name__}）")
+    return {
+        "content": message.get("content") or "",
+        "tool_calls": message.get("tool_calls") or [],
+    }
+
+
 def chat_stream(messages: List[dict], cfg: Optional[Dict[str, Any]] = None,
                 max_tokens: int = 2048):
     """流式对话，逐段 yield 文本增量。异常统一抛 AIError。"""
@@ -504,7 +552,7 @@ def _eval_check(check: dict, session_device_ips: List[str],
 
 def evaluate_lab_progress(experiment_id: str, session_device_ips: List[str],
                           cap_results: Dict[str, dict]) -> dict:
-    """评估实验进度（基于最近一次能力识别的缓存数据，零 SSH）。"""
+    """评估实验进度（基于最近一次能力识别的缓存数据，零连接）。"""
     exp = LAB_EXPERIMENTS.get(experiment_id)
     if not exp:
         raise AIError(f"未知实验: {experiment_id}")

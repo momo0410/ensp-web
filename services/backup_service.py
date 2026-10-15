@@ -1,7 +1,7 @@
 """
 backup_service.py - 设备配置备份模块
 =====================================
-通过 SSH 获取设备当前配置并保存为 .cfg 文件。
+通过本地 Console 获取设备当前配置并保存为 .cfg 文件。
 """
 
 import logging
@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Optional
 
 from .device_connector import (
-    import_netmiko,
+    import_console,
     build_conn_params,
     get_cli_error,
     safe_disconnect,
@@ -19,38 +19,41 @@ from .device_connector import (
 
 logger = logging.getLogger("ensp-web.backup")
 
-BACKUP_DIR = Path(__file__).parent.parent / "backups"
+LEGACY_BACKUP_DIR = Path(__file__).parent.parent / "backups"
 
 
 def ensure_backup_dir() -> Path:
-    """确保备份目录存在。"""
-    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-    return BACKUP_DIR
+    """
+    备份目录 = 当前拓扑目录下的 configs/。
 
+    这样配置跟着拓扑走：切换拓扑就切换一整套设备配置。
+    没有激活拓扑时回退到旧的全局 backups/。
+    """
+    from domain import workspace
+
+    name = workspace.active_topology()
+    if name is None:
+        LEGACY_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        return LEGACY_BACKUP_DIR
+    d = workspace.configs_dir_for(name)
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
 def _sanitize_filename(name: str) -> str:
     """清理文件名中的非法字符。"""
     return re.sub(r'[<>:"/\\|?*]', '_', name)
 
-
 def backup_device_config(
     device: dict,
-    source_ip: Optional[str] = None,
-    management_socket_factory=None,
-    timeout: int = 10,
-    read_timeout: int = 30,
+    timeout: int = 15,
+    read_timeout: int = 90,
 ) -> dict:
     """
     备份指定设备的当前配置。
 
-    Returns:
-        {
-            "success": bool,
-            "filename": str,
-            "filepath": str,
-            "config_length": int,
-            "error": Optional[str],
-        }
+    read_timeout 默认 90s：`display current-configuration` 在交换机/防火墙上
+    输出量很大（24 个接口 + 各协议段），30s 经常读不完；
+    eNSP 镜像的 Console 是逐字符回显的，速度比真机慢得多。
     """
     ip = device["ip"]
     hostname = device.get("name", ip)
@@ -63,18 +66,12 @@ def backup_device_config(
     }
 
     connection = None
-    ssh_sock = None
 
     try:
-        ConnectHandler, _, _ = import_netmiko()
+        ConnectHandler, _, _ = import_console()
         params = build_conn_params(device, timeout=timeout)
 
-        if source_ip and management_socket_factory:
-            ssh_sock = management_socket_factory(ip, 22, timeout=timeout)
-            params["sock"] = ssh_sock
-
         connection = ConnectHandler(**params)
-        ssh_sock = None
 
         # Get current configuration
         config_output = connection.send_command(
@@ -95,7 +92,8 @@ def backup_device_config(
         # Generate filename
         now = datetime.now()
         safe_name = _sanitize_filename(hostname)
-        filename = f"{safe_name}_{ip}_{now.strftime('%Y%m%d_%H%M%S')}.cfg"
+        safe_ip = _sanitize_filename(ip)
+        filename = f"{safe_name}_{safe_ip}_{now.strftime('%Y%m%d_%H%M%S')}.cfg"
         filepath = ensure_backup_dir() / filename
 
         filepath.write_text(config_output, encoding="utf-8")
@@ -111,14 +109,8 @@ def backup_device_config(
         logger.error("[%s] backup failed: %s", ip, e)
     finally:
         safe_disconnect(connection)
-        if ssh_sock:
-            try:
-                ssh_sock.close()
-            except OSError:
-                pass
 
     return result
-
 
 def list_backups(device_ip: str) -> list:
     """
@@ -127,11 +119,11 @@ def list_backups(device_ip: str) -> list:
     Returns:
         [{"filename": str, "filepath": str, "size": int, "created": str}, ...]
     """
-    ensure_backup_dir()
+    backup_dir = ensure_backup_dir()
     backups = []
-    safe_ip = device_ip.replace(".", "_")
+    safe_ip = _sanitize_filename(device_ip)
 
-    for f in sorted(BACKUP_DIR.glob("*.cfg"), reverse=True):
+    for f in sorted(backup_dir.glob("*.cfg"), reverse=True):
         # Match pattern: <name>_<ip>_<datetime>.cfg
         if safe_ip in f.name or device_ip in f.name:
             stat = f.stat()
@@ -143,7 +135,6 @@ def list_backups(device_ip: str) -> list:
             })
 
     return backups
-
 
 def get_backup_content(filename: str) -> Optional[str]:
     """读取备份文件内容。"""

@@ -1,28 +1,28 @@
 """
 capability_probe.py - 设备能力识别模块
 =======================================
-通过 SSH 登录华为设备，执行 display 命令，识别：
+通过本地 Console 登录华为设备，执行 display 命令，识别：
 - 设备类型（router / switch / l3_switch / unknown）
 - 支持的协议和功能（supported / configured / running）
 """
 
 import re
 import logging
+import time
 from typing import Dict, Any, Optional, List
 
 from .device_connector import (
-    import_netmiko,
+    import_console,
     build_conn_params,
     safe_disconnect,
-    run_display_command,
     command_result_from_output,
     is_unsupported_error,
     is_output_unsupported,
     strip_ansi,
 )
-from domain.ssh_collect import fast_send_command
+from domain.collect import fast_send_command
 from .capability_matrix import lookup_matrix, matrix_support, matrix_note
-from .help_tree import collect_views_ssh, detect_protocols, find_first_physical_interface, parse_help_keywords
+from .help_tree import collect_views_over_connection, detect_protocols, find_first_physical_interface, parse_help_keywords
 
 logger = logging.getLogger("ensp-web.capability")
 
@@ -189,7 +189,6 @@ RUNNING_KEYWORDS = {
     "igmp_snooping": ["enable", "router port"],
 }
 
-
 def _classify_device_role(version_output: str, device_output: str, current_config: str, model: str) -> str:
     """
     根据命令输出判断设备角色。
@@ -229,7 +228,6 @@ def _classify_device_role(version_output: str, device_output: str, current_confi
         return "switch"
 
     return "unknown"
-
 
 def _parse_interface_list(ip_intf_output: str, current_config: str) -> List[Dict[str, str]]:
     """
@@ -283,7 +281,6 @@ def _parse_interface_list(ip_intf_output: str, current_config: str) -> List[Dict
     interfaces.sort(key=_intf_sort_key)
     return interfaces
 
-
 def _make_cap(cap_key: str, supported: bool, evidence: str, note: str = "",
               error: Optional[str] = None) -> dict:
     """构造一个不经过 display 探测的能力条目（矩阵/?树直接判定）。"""
@@ -299,7 +296,6 @@ def _make_cap(cap_key: str, supported: bool, evidence: str, note: str = "",
         "note": note,
     }
 
-
 def _try_alt_commands(cap_key: str, cap: dict, get_result) -> None:
     """主命令不支持时依次尝试候选命令，任一成功即算支持（原地修改 cap）。"""
     if cap.get("supported"):
@@ -312,7 +308,6 @@ def _try_alt_commands(cap_key: str, cap: dict, get_result) -> None:
             cap["display_cmd"] = alt
             cap["evidence"] = f"{cap.get('evidence', 'probe')}+alt"
             return
-
 
 def _apply_matrix_override(cap_key: str, cap: dict, matrix: Optional[dict]) -> None:
     """
@@ -345,7 +340,6 @@ def _apply_matrix_override(cap_key: str, cap: dict, matrix: Optional[dict]) -> N
             cap["evidence"] = "matrix"
             cap["note"] = matrix_note(matrix, cap_key) or "矩阵判定不支持"
 
-
 def _apply_tree_detection(result: dict, views: Dict[str, Any]) -> None:
     """
     用 ? 命令树给探测结果补证据：树里实测见到的协议至少 supported=True。
@@ -372,7 +366,6 @@ def _apply_tree_detection(result: dict, views: Dict[str, Any]) -> None:
             if "helptree" not in prev:
                 cap["evidence"] = f"{prev}+helptree"
 
-
 def _collect_views_from_result(result: dict, connection: Any = None,
                                shared_results: Optional[dict] = None,
                                read_timeout: int = 3,
@@ -392,13 +385,12 @@ def _collect_views_from_result(result: dict, connection: Any = None,
 
     interface_name = find_first_physical_interface(
         result.get("raw_outputs", {}).get("display interface brief", ""))
-    tree_views, _errors = collect_views_ssh(
+    tree_views, _errors = collect_views_over_connection(
         connection, read_timeout=read_timeout,
         interface_name=interface_name, deadline_s=deadline_s,
     )
     views.update(tree_views)
     return views
-
 
 def _check_capability(
     cap_key: str,
@@ -505,22 +497,17 @@ def _check_capability(
         "note": "",
     }
 
-
 def probe_capabilities(
     device: dict,
-    source_ip: Optional[str] = None,
-    management_socket_factory=None,
     timeout: int = 10,
     read_timeout: int = 15,
 ) -> dict:
     """
-    通过 SSH 连接设备并识别所有能力。
+    通过本地 Console 连接设备并识别所有能力。
 
     Args:
         device: 设备字典
-        source_ip: 管理源 IP（可选）
-        management_socket_factory: socket 工厂函数
-        timeout: SSH 超时
+        timeout: 连接超时
         read_timeout: 命令读取超时
 
     Returns:
@@ -536,26 +523,20 @@ def probe_capabilities(
         "os": "VRP",
         "model": "",
         "version": "",
-        "ssh_status": False,
+        "ok": False,
         "capabilities": {},
         "raw_outputs": {},
         "errors": [],
     }
 
     connection = None
-    ssh_sock = None
 
     try:
-        ConnectHandler, NetMikoTimeoutException, NetMikoAuthenticationException = import_netmiko()
+        ConnectHandler, ConsoleTimeoutError, ConsoleAuthError = import_console()
         params = build_conn_params(device, timeout=timeout)
 
-        if source_ip and management_socket_factory:
-            ssh_sock = management_socket_factory(ip, 22, timeout=timeout)
-            params["sock"] = ssh_sock
-
         connection = ConnectHandler(**params)
-        ssh_sock = None
-        result["ssh_status"] = True
+        result["ok"] = True
 
         # ---- Execute base commands ----
         current_config = ""
@@ -687,33 +668,27 @@ def probe_capabilities(
                     ip, result["device_role"], len(result["capabilities"]), len(result["interfaces"]))
 
     except ImportError:
-        result["errors"].append("Netmiko 未安装")
+        result["errors"].append("Console 连接器不可用")
     except Exception as e:
         err_name = type(e).__name__
         if "Timeout" in err_name:
-            result["errors"].append(f"SSH 连接超时: {e}")
+            result["errors"].append(f"Console 连接超时: {e}")
         elif "Authentication" in err_name:
-            result["errors"].append(f"SSH 认证失败: {e}")
+            result["errors"].append(f"Console 认证失败: {e}")
         else:
             result["errors"].append(str(e))
         logger.error("[%s] capability probe failed: %s", ip, e)
     finally:
         safe_disconnect(connection)
-        if ssh_sock:
-            try:
-                ssh_sock.close()
-            except OSError:
-                pass
 
     return result
-
 
 def probe_capabilities_from_cache(
     collection_result: dict,
     device: dict = None,
 ) -> Dict[str, Any]:
     """
-    从已有采集结果中提取能力信息（零 SSH 开销）。
+    从已有采集结果中提取能力信息（零连接开销）。
 
     采集阶段已执行的 display 命令可直接用于能力判断：
       - display version        → supported、model、role
@@ -727,7 +702,7 @@ def probe_capabilities_from_cache(
 
     Returns:
         与 probe_capabilities 相同结构的结果字典。
-        unknown_capabilities: 无法从缓存判断的能力列表（需要补跑 SSH）。
+        unknown_capabilities: 无法从缓存判断的能力列表（需要补跑探测）。
     """
     ip = collection_result.get("ip", "")
     device = device or {"ip": ip, "name": collection_result.get("name", ip)}
@@ -735,7 +710,7 @@ def probe_capabilities_from_cache(
     result = {
         "ip": ip,
         "device_name": device.get("name", ip),
-        "ssh_status": collection_result.get("ssh_ok", False),
+        "ok": collection_result.get("ok", False),
         "device_role": "unknown",
         "model": "",
         "platform": "",
@@ -747,7 +722,7 @@ def probe_capabilities_from_cache(
         "unknown_capabilities": [],  # 无法从缓存判断的能力
     }
 
-    if not collection_result.get("ssh_ok"):
+    if not collection_result.get("ok"):
         return result
 
     commands = collection_result.get("commands", {})
@@ -857,13 +832,11 @@ def probe_capabilities_from_cache(
     else:
         result["interfaces"] = info.get("interfaces", [])
 
+    result["probed_at"] = time.time()
     return result
-
 
 def probe_capabilities_parallel(
     device: dict,
-    source_ip: Optional[str] = None,
-    management_socket_factory=None,
     timeout: int = 10,
     read_timeout: int = 10,
     collection_result: dict = None,
@@ -872,25 +845,25 @@ def probe_capabilities_parallel(
     并行能力识别：先从缓存提取，再补跑缺失命令。
 
     策略：
-      1. 如果有采集缓存 → probe_capabilities_from_cache 零 SSH 提取
-      2. 如果 unknown_capabilities 为空 → 直接返回（0 SSH）
-      3. 如果有缺失 → 只跑缺失能力对应的 display 命令（3 个 SSH 会话并行）
+      1. 如果有采集缓存 → probe_capabilities_from_cache 零连接 提取
+      2. 如果 unknown_capabilities 为空 → 直接返回（零连接）
+      3. 如果有缺失 → 只跑缺失能力对应的 display 命令
 
     Args:
-        collection_result: 采集阶段的结果（可选），有缓存时大幅减少 SSH 调用。
+        collection_result: 采集阶段的结果（可选），有缓存时大幅减少连接次数。
     """
     import threading
 
     ip = device["ip"]
 
     # ---- Step 1: 从缓存提取 ----
-    if collection_result and collection_result.get("ssh_ok"):
+    if collection_result and collection_result.get("ok"):
         cached = probe_capabilities_from_cache(collection_result, device)
         unknown = cached.get("unknown_capabilities", [])
 
         if not unknown:
-            # 所有能力都能从缓存判断，零 SSH
-            logger.info("[%s] 能力识别完全命中缓存，0 SSH", ip)
+            # 所有能力都能从缓存判断，零连接
+            logger.info("[%s] 能力识别完全命中缓存，零连接", ip)
             cached.pop("unknown_capabilities", None)
             return cached
 
@@ -922,7 +895,7 @@ def probe_capabilities_parallel(
         if need_interface_brief:
             missing_cmds.add("display interface brief")
 
-        # 如果 supported 状态不确定（没有 display 输出），需要 SSH 确认
+        # 如果 supported 状态不确定（没有 display 输出），需要连设备确认
         # 过滤掉已经有输出的命令
         cmds_to_run = []
         for cmd in missing_cmds:
@@ -940,7 +913,7 @@ def probe_capabilities_parallel(
             cached.pop("unknown_capabilities", None)
             return cached
 
-        # ---- Step 2: 补跑缺失命令（并行 SSH）----
+        # ---- Step 2: 补跑缺失命令 ----
         # 将缺失命令分成最多 3 组
         groups = [[], [], []]
         for i, cmd in enumerate(cmds_to_run):
@@ -950,16 +923,11 @@ def probe_capabilities_parallel(
         shared_results = {}
         cmd_lock = threading.Lock()
 
-        from .device_connector import build_conn_params, import_netmiko
+        from .device_connector import build_conn_params, import_console
         base_params = build_conn_params(device, timeout=timeout)
-        if source_ip and management_socket_factory:
-            try:
-                base_params["sock"] = management_socket_factory(ip, 22, timeout=timeout)
-            except Exception:
-                pass
 
         def _run_group(group_name, cmd_list):
-            ConnectHandler, _, _ = import_netmiko()
+            ConnectHandler, _, _ = import_console()
             conn = None
             try:
                 conn = ConnectHandler(**dict(base_params))
@@ -1025,13 +993,14 @@ def probe_capabilities_parallel(
                             cap_result["error"] = None
 
         cached.pop("unknown_capabilities", None)
+        cached["probed_at"] = time.time()
         return cached
 
     # ---- 无缓存：走完整的并行探测 ----
     result = {
         "ip": ip,
         "device_name": device.get("name", ip),
-        "ssh_status": False,
+        "ok": False,
         "device_role": "unknown",
         "model": "",
         "platform": "",
@@ -1068,38 +1037,25 @@ def probe_capabilities_parallel(
     from .device_connector import build_conn_params
     base_params = build_conn_params(device, timeout=timeout)
 
-    if source_ip and management_socket_factory:
-        try:
-            ssh_sock = management_socket_factory(ip, 22, timeout=timeout)
-            base_params["sock"] = ssh_sock
-            result["ssh_status"] = True
-        except Exception:
-            pass
-    else:
-        # 验证 SSH 可连接
-        try:
-            from .device_connector import import_netmiko
-            ConnectHandler, _, _ = import_netmiko()
-            test_conn = ConnectHandler(**base_params)
-            test_conn.disconnect()
-            result["ssh_status"] = True
-        except Exception as e:
-            result["errors"].append(f"SSH 连接失败: {e}")
-            return result
+    # 验证 Console 可连接
+    try:
+        from .device_connector import import_console
+        ConnectHandler, _, _ = import_console()
+        test_conn = ConnectHandler(**base_params)
+        test_conn.disconnect()
+        result["ok"] = True
+    except Exception as e:
+        result["errors"].append(f"Console 连接失败: {e}")
+        return result
 
     # 并行执行 3 组命令
     shared_results = {}
     cmd_lock = threading.Lock()
 
     def _run_group(group_name, cmd_list):
-        from .device_connector import import_netmiko
-        ConnectHandler, _, _ = import_netmiko()
+        from .device_connector import import_console
+        ConnectHandler, _, _ = import_console()
         conn_params = dict(base_params)
-        if source_ip and management_socket_factory:
-            try:
-                conn_params["sock"] = management_socket_factory(ip, 22, timeout=timeout)
-            except Exception:
-                pass
         conn = None
         try:
             conn = ConnectHandler(**conn_params)
@@ -1144,7 +1100,7 @@ def probe_capabilities_parallel(
 
     # 合并结果
     result["raw_outputs"] = shared_results
-    result["ssh_status"] = True
+    result["ok"] = True
 
     # 提取关键输出
     version_output = shared_results.get("display version", {}).get("output", "")

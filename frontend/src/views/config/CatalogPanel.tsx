@@ -20,8 +20,6 @@ export function CatalogPanel() {
   const [entries, setEntries] = useState<CatalogEntry[]>([])
   const [loadError, setLoadError] = useState("")
   const [probe, setProbe] = useState<ProbeResult | null>(null) // ? 探测结果
-  const [probeMode, setProbeMode] = useState("console")
-  const [probePort, setProbePort] = useState("")
   const [probeIp, setProbeIp] = useState("")
   const [probeForce, setProbeForce] = useState(false)
   const [onlySupported, setOnlySupported] = useState(false)
@@ -31,8 +29,6 @@ export function CatalogPanel() {
   // 表单态
   const [currentKey, setCurrentKey] = useState<string | null>(null)
   const [params, setParams] = useState({})
-  const [targetMode, setTargetMode] = useState("console")
-  const [consolePort, setConsolePort] = useState("")
   const [targetIp, setTargetIp] = useState("")
   const [saveConfig, setSaveConfig] = useState(false)
   const [preview, setPreview] = useState<string | null>(null)
@@ -67,14 +63,9 @@ export function CatalogPanel() {
   }
 
   const doProbe = async () => {
-    let target
-    if (probeMode === "console") {
-      if (!probePort.trim()) { notifications.show({ color: "red", message: "请填写 Console 端口" }); return }
-      target = { mode: "console", port: parseInt(probePort, 10) }
-    } else {
-      if (!probeIp) { notifications.show({ color: "red", message: "请选择目标设备" }); return }
-      target = { mode: "ssh", ip: probeIp }
-    }
+    const dev = devices.find((d) => d.ip === probeIp)
+    if (!dev) { notifications.show({ color: "red", message: "请选择目标设备" }); return }
+    const target = { ip: dev.ip, console_port: dev.console_port ?? undefined }
     setProbing(true)
     setProbeStatus({ kind: "probing", text: "探测中…" })
     try {
@@ -132,15 +123,10 @@ export function CatalogPanel() {
   const doDeploy = async () => {
     if (!currentKey) return
     const body: Record<string, unknown> = { key: currentKey, params: collectParams(currentEntry!, params), save_config: saveConfig }
-    if (targetMode === "console") {
-      if (!consolePort.trim()) { notifications.show({ color: "red", message: "请填写 Console 端口" }); return }
-      body.console_port = parseInt(consolePort, 10)
-    } else {
-      if (!targetIp) { notifications.show({ color: "red", message: "请选择目标设备" }); return }
-      body.target_ip = targetIp
-    }
+    if (!targetIp) { notifications.show({ color: "red", message: "请选择目标设备" }); return }
+    body.target_ip = targetIp
     const ok = await confirm("确认下发配置",
-      `即将通过 ${targetMode === "console" ? "Console（零 IP）" : "SSH"} 通道下发指令，是否继续？`)
+      "即将通过本地 Console 通道下发指令，是否继续？")
     if (!ok) return
     setDeploying(true)
     try {
@@ -181,16 +167,9 @@ export function CatalogPanel() {
       <Stack gap="sm">
         <Group align="center" gap="xs" wrap="wrap">
           <Text size="sm">? 探测目标：</Text>
-          <Select w={170} size="xs" value={probeMode} onChange={(v) => setProbeMode(v || "console")}
-            data={[{ value: "console", label: "Console 端口（零 IP）" }, { value: "ssh", label: "SSH 设备" }]} />
-          {probeMode === "console" ? (
-            <NumberInput w={100} size="xs" placeholder="端口 2000" value={probePort || ""}
-              onChange={(v) => setProbePort(v == null ? "" : String(v))} />
-          ) : (
-            <Select w={170} size="xs" placeholder="-- 选择设备 --" searchable
-              data={devices.map((d) => ({ value: d.ip, label: `${d.name} (${d.ip})` }))}
-              value={probeIp} onChange={(v) => setProbeIp(v || "")} />
-          )}
+          <Select w={220} size="xs" placeholder="-- 选择设备 --" searchable
+            data={devices.map((d) => ({ value: d.ip, label: `${d.name} (Console ${d.console_port ?? "-"})` }))}
+            value={probeIp} onChange={(v) => setProbeIp(v || "")} />
           <Button size="xs" variant="default" loading={probing} onClick={doProbe}>探测支持命令</Button>
           <Checkbox size="xs" label="忽略缓存" checked={probeForce} onChange={(e) => setProbeForce(e.currentTarget.checked)} />
           <Checkbox size="xs" label="仅显示支持" checked={onlySupported}
@@ -243,17 +222,10 @@ export function CatalogPanel() {
             </Stack>
 
             <Group align="center" gap="xs">
-              <Text size="sm">下发通道：</Text>
-              <Select w={170} size="xs" value={targetMode} onChange={(v) => setTargetMode(v || "console")}
-                data={[{ value: "console", label: "Console 端口（零 IP）" }, { value: "ssh", label: "SSH（已纳管设备）" }]} />
-              {targetMode === "console" ? (
-                <NumberInput w={140} size="xs" placeholder="例如 2000" value={consolePort || ""}
-                  onChange={(v) => setConsolePort(v == null ? "" : String(v))} />
-              ) : (
-                <Select w={200} size="xs" placeholder="-- 请选择设备 --" searchable
-                  data={devices.map((d) => ({ value: d.ip, label: `${d.name} (${d.ip})` }))}
-                  value={targetIp} onChange={(v) => setTargetIp(v || "")} />
-              )}
+              <Text size="sm">下发目标：</Text>
+              <Select w={240} size="xs" placeholder="-- 请选择设备 --" searchable
+                data={devices.map((d) => ({ value: d.ip, label: `${d.name} (Console ${d.console_port ?? "-"})` }))}
+                value={targetIp} onChange={(v) => setTargetIp(v || "")} />
             </Group>
 
             <Group gap="md">
@@ -269,7 +241,7 @@ export function CatalogPanel() {
                 <MonoPre>{preview}</MonoPre>
               </div>
             )}
-            {result && <DeployResult data={result} ip={targetMode === "ssh" ? targetIp : null} />}
+            {result && <DeployResult data={result} ip={targetIp || null} />}
           </Stack>
         )}
       </Stack>

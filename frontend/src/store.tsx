@@ -2,7 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useRef, useSt
 import { api } from "./api"
 import type {
   CapabilityResult, CapabilityResult as CapResultT, CollectionResult, DeviceInfo,
-  DevicePingResult, InterfaceInfo, LastDeploy, RoleResult, TopologyLink,
+  DevicePingResult, LastDeploy, RoleResult, TopologyLink, TopologySummary,
 } from "./types"
 
 export type StatusType = "info" | "success" | "error" | "warning" | "loading"
@@ -10,12 +10,6 @@ export type StatusType = "info" | "success" | "error" | "warning" | "loading"
 export interface BatchStatus {
   type: StatusType
   message: string
-}
-
-export interface SelectedInterface {
-  name: string
-  ip: string
-  auto?: boolean
 }
 
 // 跨视图跳转的待处理请求（配合懒加载：目标视图挂载后消费）
@@ -40,29 +34,33 @@ export interface WorkbenchBus {
 interface AppContext {
   section: string
   setSection: (s: string) => void
-  interfaces: InterfaceInfo[]
-  selectedInterface: SelectedInterface | null
-  subnet: string
-  discoverSubnet: string
-  setDiscoverSubnet: React.Dispatch<React.SetStateAction<string>>
-  selectInterface: (name: string, ip: string, netmask: string, auto?: boolean) => Promise<boolean>
-  loadInterfaces: () => Promise<boolean>
   devices: DeviceInfo[]
+  devicesRevision: number
+  links: TopologyLink[]
+  topologies: TopologySummary[]
+  workspaceRoot: string
+  activeTopology: string | null
+  loadLinks: () => Promise<void>
+  addLink: (a: { device: string; interface: string }, b: { device: string; interface: string }) => Promise<void>
+  removeLink: (a: { device: string; interface: string }, b: { device: string; interface: string }) => Promise<void>
+  loadTopologyLibrary: () => Promise<void>
+  activateTopology: (name: string) => Promise<void>
+  createTopology: (name: string) => Promise<void>
+  deleteTopology: (name: string) => Promise<void>
+  setWorkspaceRoot: (path: string) => Promise<void>
   collectionResults: Record<string, CollectionResult>
   capabilityResults: Record<string, CapResultT>
   roleResults: Record<string, RoleResult>
-  topologyLinks: TopologyLink[]
+  roleNotProbed: { ip: string; name: string }[]
   loadDevices: () => Promise<void>
   saveDevice: (payload: DeviceInfo, editingIp: string | null) => Promise<void>
   deleteDevice: (ip: string) => Promise<void>
   pingDevice: (ip: string) => Promise<{ online?: boolean }>
-  discoverDevices: (options?: { collectAfter?: boolean; subnet?: string }) => Promise<unknown>
   collectDevice: (ip: string) => Promise<CollectionResult | null>
   collectAll: (options?: { automatic?: boolean }) => Promise<unknown>
   probeAllCapabilities: (auto?: boolean) => Promise<unknown>
   probeSingleCapability: (ip: string) => Promise<void>
   analyzeRoles: (silent?: boolean) => Promise<Record<string, RoleResult>>
-  loadTopology: (silent?: boolean) => Promise<void>
   loadServerData: () => Promise<void>
   loadCollectionResults: () => Promise<void>
   loadCapabilityResults: () => Promise<void>
@@ -96,26 +94,25 @@ export function useApp(): AppContext {
 
 /**
  * 全局共享状态：
- * - 设备/采集/能力/角色/拓扑/网卡 数据与加载动作（保持旧版的级联链：
- *   发现 → 批量采集 → 自动能力识别 → 静默角色分析）
+ * - 设备/采集/能力/角色 数据与加载动作（级联链：
+ *   批量采集 → 自动能力识别 → 静默角色分析）
  * - 批量状态条 batchStatus、最近下发结果 lastDeploy（AI 诊断数据源）
  * - 跨视图协作总线 deployBus / aiBus / workbenchBus
  */
 export function AppProvider({ children }: { children: React.ReactNode }) {
-  const [section, setSection] = useState("section-interfaces")
-
-  // 网卡
-  const [interfaces, setInterfaces] = useState<InterfaceInfo[]>([])
-  const [selectedInterface, setSelectedInterface] = useState<SelectedInterface | null>(null)
-  const [subnetState, setSubnetState] = useState("")
-  const [discoverSubnet, setDiscoverSubnet] = useState("")
+  const [section, setSection] = useState("section-devices")
 
   // 设备与结果
   const [devices, setDevices] = useState<DeviceInfo[]>([])
+  const [devicesRevision, setDevicesRevision] = useState(0)
+  const [links, setLinks] = useState<TopologyLink[]>([])
+  const [topologies, setTopologies] = useState<TopologySummary[]>([])
+  const [workspaceRoot, setWorkspaceRootState] = useState("")
+  const [activeTopology, setActiveTopology] = useState<string | null>(null)
   const [collectionResults, setCollectionResults] = useState<Record<string, CollectionResult>>({})
   const [capabilityResults, setCapabilityResults] = useState<Record<string, CapResultT>>({})
   const [roleResults, setRoleResults] = useState<Record<string, RoleResult>>({})
-  const [topologyLinks, setTopologyLinks] = useState<TopologyLink[]>([])
+  const [roleNotProbed, setRoleNotProbed] = useState<{ ip: string; name: string }[]>([])
 
   // 全局 UI 状态
   const [batchStatus, setBatchStatus] = useState<BatchStatus | null>(null)
@@ -138,70 +135,104 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setBatchStatus({ type, message })
   }, [])
 
-  // ---------- 网卡 ----------
-  const selectInterface = useCallback(async (name: string, ip: string, netmask: string, auto = false): Promise<boolean> => {
-    if (!ip || !netmask) return false
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const data: any = await api("/api/interfaces/select", {
-        method: "POST",
-        body: JSON.stringify({ name, ip, netmask }),
-      })
-      setSelectedInterface({ name, ip, auto })
-      setSubnetState(data.subnet || "")
-      setDiscoverSubnet((prev: string) => prev.trim() ? prev : (data.subnet || ""))
-      return true
-    } catch (e) {
-      console.error("选择网卡失败:", (e as Error).message)
-      return false
-    }
-  }, [])
-
-  const loadInterfaces = useCallback(async (): Promise<boolean> => {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const data: any = await api("/api/interfaces")
-      setInterfaces(data.interfaces || [])
-      const recommended = data.recommended_interface || (data.interfaces || []).find((i: InterfaceInfo) => i.is_recommended)
-      if (recommended && recommended.ipv4 && recommended.netmask) {
-        await selectInterface(recommended.name, recommended.ipv4, recommended.netmask, true)
-      }
-      return true
-    } catch (e) {
-      console.error("读取网卡失败:", (e as Error).message)
-      return false
-    }
-  }, [selectInterface])
-
   // ---------- 设备 ----------
   const loadDevices = useCallback(async () => {
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const data: any = await api("/api/devices")
       setDevices(data.devices || [])
+      setDevicesRevision(data.revision ?? 0)
     } catch (e) {
       console.error("加载设备列表失败:", (e as Error).message)
     }
   }, [])
 
+  const loadLinks = useCallback(async () => {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const data: any = await api("/api/topology/links")
+      setLinks(data.links || [])
+    } catch (e) {
+      console.error("加载连线失败:", (e as Error).message)
+    }
+  }, [])
+
+  const addLink = useCallback(async (a: { device: string; interface: string }, b: { device: string; interface: string }) => {
+    const data = await api<TopologyLink[]>("/api/topology/links", {
+      method: "POST", body: JSON.stringify({ a, b }),
+    })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    setLinks((data as any).links || [])
+  }, [])
+
+  const removeLink = useCallback(async (a: { device: string; interface: string }, b: { device: string; interface: string }) => {
+    const qs = new URLSearchParams({
+      a_device: a.device, a_interface: a.interface,
+      b_device: b.device, b_interface: b.interface,
+    })
+    const data = await api<TopologyLink[]>(`/api/topology/links?${qs}`, { method: "DELETE" })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    setLinks((data as any).links || [])
+  }, [])
+
+  const loadTopologyLibrary = useCallback(async () => {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const data: any = await api("/api/topology/library")
+      setTopologies(data.topologies || [])
+      setWorkspaceRootState(data.workspace_root || "")
+      setActiveTopology(data.active || null)
+    } catch (e) {
+      console.error("加载拓扑库失败:", (e as Error).message)
+    }
+  }, [])
+
+  const activateTopology = useCallback(async (name: string) => {
+    await api("/api/topology/library/activate", { method: "POST", body: JSON.stringify({ name }) })
+    await loadTopologyLibrary()
+    await loadDevices()
+    await loadLinks()
+  }, [loadDevices, loadLinks, loadTopologyLibrary])
+
+  const createTopology = useCallback(async (name: string) => {
+    await api("/api/topology/library/create", { method: "POST", body: JSON.stringify({ name }) })
+    await loadTopologyLibrary()
+  }, [loadTopologyLibrary])
+
+  const deleteTopology = useCallback(async (name: string) => {
+    await api(`/api/topology/library/${encodeURIComponent(name)}`, { method: "DELETE" })
+    await loadTopologyLibrary()
+    await loadDevices()
+    await loadLinks()
+  }, [loadDevices, loadLinks, loadTopologyLibrary])
+
+  const setWorkspaceRoot = useCallback(async (path: string) => {
+    await api("/api/workspace/root", { method: "POST", body: JSON.stringify({ path }) })
+    await loadTopologyLibrary()
+    await loadDevices()
+    await loadLinks()
+  }, [loadDevices, loadLinks, loadTopologyLibrary])
+
   const saveDevice = useCallback(async (payload: DeviceInfo, editingIp: string | null) => {
+    // 带上当前版本号，后端做乐观锁校验（过期则 409，避免覆盖别处的改动）
+    const body = JSON.stringify({ ...payload, revision: devicesRevision })
     if (editingIp) {
-      await api(`/api/devices/${encodeURIComponent(editingIp)}`, { method: "PUT", body: JSON.stringify(payload) })
+      await api(`/api/devices/${encodeURIComponent(editingIp)}`, { method: "PUT", body })
     } else {
-      await api("/api/devices", { method: "POST", body: JSON.stringify(payload) })
+      await api("/api/devices", { method: "POST", body })
     }
     await loadDevices()
-  }, [loadDevices])
+  }, [loadDevices, devicesRevision])
 
   const deleteDevice = useCallback(async (ip: string) => {
-    await api(`/api/devices/${encodeURIComponent(ip)}`, { method: "DELETE" })
+    await api(`/api/devices/${encodeURIComponent(ip)}?revision=${devicesRevision}`, { method: "DELETE" })
     setCollectionResults((prev) => {
       const next = { ...prev }
       delete next[ip]
       return next
     })
     await loadDevices()
-  }, [loadDevices])
+  }, [loadDevices, devicesRevision])
 
   const pingDevice = useCallback(async (ip: string) => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -210,29 +241,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return data
   }, [])
 
-  // ---------- 发现与采集（级联链） ----------
-  const getConsoleDiagnosticMessage = useCallback(async (): Promise<string> => {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const data: any = await api("/api/ensp-console-diagnostics")
-      const consoleDevices = data.console_devices || []
-      if (!consoleDevices.length) return ""
-      if (data.cloud_bridge_issue) {
-        const names = (data.cloud_issue_devices || [])
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          .map((item: any) => `${item.name}(${(item.mgmt_ips || []).join("/")})`)
-          .join("、")
-        return names
-          ? `。Console 已检测到 ${names}，SSH 配置存在，但宿主机与管理 IP 不互通，重点检查 Cloud 到 VirtualBox Host-Only 的双向映射`
-          : "。Console 已检测到设备，但宿主机与管理 IP 不互通，重点检查 Cloud 到 VirtualBox Host-Only 的双向映射"
-      }
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      return `。Console 可见设备: ${consoleDevices.map((item: any) => item.name).join("、")}`
-    } catch (e) {
-      return ""
-    }
-  }, [])
-
+  // ---------- 采集与分析（级联链） ----------
   const analyzeRoles = useCallback(async (silent = false): Promise<Record<string, RoleResult>> => {
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -240,7 +249,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const map: Record<string, RoleResult> = {}
       for (const r of data.results || []) map[r.ip] = r
       setRoleResults(map)
-      if (!silent && data.count === 0) {
+      // 后端会区分"探测过但没角色"和"从未探测过"；后者要提示去能力识别，
+      // 否则界面把这些设备渲染成空壳卡片，看不出差别。
+      setRoleNotProbed(data.not_probed || [])
+      if (!silent && data.count === 0 && !(data.not_probed || []).length) {
         showStatus("warning", "暂无已识别能力的设备，请先执行能力识别")
       }
       return map
@@ -260,7 +272,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       analyzeRoles(true)
       if (auto) {
         showStatus("success",
-          `采集及能力识别完成: ${(data.results || []).filter((r: CapResultT) => r.ssh_status).length}/${(data.results || []).length} 台设备识别成功`)
+          `采集及能力识别完成: ${(data.results || []).filter((r: CapResultT) => r.ok).length}/${(data.results || []).length} 台设备识别成功`)
       }
       return data
     } catch (e) {
@@ -278,17 +290,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   }, [])
 
-  const loadTopology = useCallback(async (silent = false) => {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const data: any = await api("/api/topology")
-      setTopologyLinks((data.topology && data.topology.links) || [])
-      if (!silent) flashStatus(null)
-    } catch (e) {
-      if (!silent) showStatus("error", "加载拓扑失败: " + (e as Error).message)
-    }
-  }, [flashStatus, showStatus])
-
   const collectAll = useCallback(async (options: { automatic?: boolean } = {}): Promise<unknown> => {
     const automatic = !!options.automatic
     try {
@@ -297,18 +298,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (data.devices) setDevices(data.devices)
       setCollectionResults((prev) => ({ ...prev, ...(data.results || {}) }))
       const results: CollectionResult[] = Object.values(data.results || {})
-      const okCount = results.filter((r) => r.ssh_ok).length
+      const okCount = results.filter((r) => r.ok).length
       if (!automatic) {
-        showStatus("success", `批量采集完成: ${okCount}/${results.length} 台 SSH 成功${(data.lldp_added || []).length ? `，LLDP 新增 ${(data.lldp_added || []).length} 台` : ""}`)
+        showStatus("success", `批量采集完成: ${okCount}/${results.length} 台成功`)
       }
-      if (automatic) loadTopology(true)
       if (okCount > 0) await probeAllCapabilities(true)
       return data
     } catch (e) {
       if (!automatic) showStatus("error", "批量采集失败: " + (e as Error).message)
       return null
     }
-  }, [loadTopology, probeAllCapabilities, showStatus])
+  }, [probeAllCapabilities, showStatus])
 
   const collectDevice = useCallback(async (ip: string): Promise<CollectionResult | null> => {
     try {
@@ -316,7 +316,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const data: any = await api(`/api/collect/${encodeURIComponent(ip)}`, { method: "POST" })
       if (data.result) {
         setCollectionResults((prev) => ({ ...prev, [ip]: data.result }))
-        if (data.result.ssh_ok) probeSingleCapability(ip)
+        if (data.result.ok) probeSingleCapability(ip)
       }
       return data.result || null
     } catch (e) {
@@ -324,58 +324,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       return null
     }
   }, [probeSingleCapability, showStatus])
-
-  const discoverDevices = useCallback(async (options: { collectAfter?: boolean; subnet?: string } = {}): Promise<unknown> => {
-    const collectAfter = options.collectAfter !== false
-    const subnet = (options.subnet ?? discoverSubnet).trim()
-
-    showStatus("loading", "正在扫描管理网段并识别 eNSP 设备...")
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const data: any = await api("/api/discover-devices", {
-        method: "POST",
-        body: JSON.stringify({
-          subnet: subnet || subnetState || null,
-          replace: true,
-          ssh_identify: true,
-        }),
-      })
-      if (data.suspicious) {
-        showStatus("error", data.message || "发现结果异常偏多，已保留当前设备列表")
-        return data
-      }
-      setDevices(data.devices || [])
-      setCollectionResults((prev) => {
-        const next = { ...prev }
-        for (const result of Object.values(data.discovery_results || {})) {
-          next[(result as CollectionResult).ip!] = result as CollectionResult
-        }
-        return next
-      })
-
-      const sshOk = Object.values(data.discovery_results || {}).filter((r) => (r as CollectionResult).ssh_ok).length
-      const ignoredCount = (data.ignored || []).length
-      const ignoredText = ignoredCount ? `，已忽略 ${ignoredCount} 个未通过 Ping+SSH 的地址` : ""
-      if (data.discovered.length && collectAfter) {
-        showStatus("loading", `发现 ${data.discovered.length} 台 Ping+SSH 通过的设备，正在自动采集设备信息${ignoredText}...`)
-        await collectAll({ automatic: true })
-      } else {
-        let message = data.discovered.length
-          ? `发现 ${data.discovered.length} 台 Ping+SSH 通过的设备，${sshOk} 台完成 SSH 识别${ignoredText}，设备列表已同步`
-          : data.replaced
-            ? `未发现 Ping+SSH 均通过的 eNSP 设备${ignoredText}，设备列表已同步为空。请检查 Cloud 绑定、管理 IP 和 SSH`
-            : `未发现 Ping+SSH 均通过的 eNSP 设备${ignoredText}，已保留当前设备列表。请检查 Cloud 绑定、管理 IP 和 SSH`
-        if (!data.discovered.length) {
-          message += await getConsoleDiagnosticMessage()
-        }
-        showStatus(data.discovered.length ? "success" : "error", message)
-      }
-      return data
-    } catch (e) {
-      showStatus("error", "发现设备失败: " + (e as Error).message)
-      return null
-    }
-  }, [collectAll, discoverSubnet, getConsoleDiagnosticMessage, showStatus, subnetState])
 
   // ---------- 启动初始化 ----------
   const loadCollectionResults = useCallback(async () => {
@@ -403,21 +351,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const data: any = await api("/api/server-data")
       if (!data.success) return
-      if (data.selected_interface) {
-        setSelectedInterface({ name: data.selected_interface.name, ip: data.selected_interface.ip })
-        setSubnetState(data.subnet || "")
-      }
       setDevices(data.devices || [])
       setCollectionResults(data.collection_results || {})
       setCapabilityResults(data.capability_results || {})
-      loadInterfaces()
-      loadTopology(true)
       flashStatus(null)
     } catch (e) {
       console.error("加载服务器数据失败:", (e as Error).message)
       showStatus("error", "加载数据失败: " + (e as Error).message)
     }
-  }, [flashStatus, loadInterfaces, loadTopology, showStatus])
+  }, [flashStatus, showStatus])
 
   useEffect(() => {
     let interval: ReturnType<typeof setInterval> | null = null
@@ -465,13 +407,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const value: AppContext = {
     section, setSection,
-    interfaces, selectedInterface, subnet: subnetState, discoverSubnet, setDiscoverSubnet,
-    selectInterface, loadInterfaces,
-    devices, collectionResults, capabilityResults, roleResults, topologyLinks,
+    devices, devicesRevision, collectionResults, capabilityResults, roleResults, roleNotProbed,
+    links, topologies, workspaceRoot, activeTopology,
+    loadLinks, addLink, removeLink,
+    loadTopologyLibrary, activateTopology, createTopology, deleteTopology, setWorkspaceRoot,
     loadDevices, saveDevice, deleteDevice, pingDevice,
-    discoverDevices, collectDevice, collectAll,
+    collectDevice, collectAll,
     probeAllCapabilities, probeSingleCapability, analyzeRoles,
-    loadTopology, loadServerData, loadCollectionResults, loadCapabilityResults,
+    loadServerData, loadCollectionResults, loadCapabilityResults,
     batchStatus, showStatus, flashStatus,
     lastDeploy, setLastDeploy,
     aiConfigured, setAiConfigured,

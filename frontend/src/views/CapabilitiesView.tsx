@@ -61,7 +61,7 @@ function CapabilityCard({ r }: { r: CapabilityResult }) {
               <Badge variant="light" size="sm" color={role === "router" ? "blue" : role === "switch" ? "cyan" : role === "l3_switch" ? "indigo" : "gray"}>
                 {(ROLE_NAMES as Record<string, string>)[role] || role}
               </Badge>
-              <Badge color={r.ssh_status ? "teal" : "red"} variant="light" size="sm">{r.ssh_status ? "SSH OK" : "SSH 失败"}</Badge>
+              <Badge color={r.ok ? "teal" : "red"} variant="light" size="sm">{r.ok ? "已连接" : "连接失败"}</Badge>
               <Badge color="blue" variant="light" size="sm">支持 {count((c) => !!c.supported)}</Badge>
               <Badge color="teal" variant="light" size="sm">已配置 {count((c) => !!c.configured)}</Badge>
               <Badge color="grape" variant="light" size="sm">运行中 {count((c) => !!c.running)}</Badge>
@@ -95,7 +95,7 @@ function CapabilityCard({ r }: { r: CapabilityResult }) {
             ))}
           </Stack>
 
-          {r.ssh_status && (
+          {r.ok && (
             <>
               <Group>
                 <Button size="xs" variant="default" onClick={discoverTree}>? 命令树协议发现</Button>

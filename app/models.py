@@ -1,7 +1,7 @@
 """
 API 请求体数据模型（Pydantic）。
 
-全部为路由层共用的请求模型。仅依赖 app/config.py（SSH 默认值）
+全部为路由层共用的请求模型。仅依赖 app/config.py（设备默认参数）
 与 services/config_clone_service（配置复制的默认功能域）。
 """
 
@@ -11,32 +11,75 @@ from pydantic import BaseModel, Field
 
 from app.config import (
     DEFAULT_DEVICE_TYPE,
-    DEFAULT_SSH_PASSWORD,
-    DEFAULT_SSH_USERNAME,
+    DEFAULT_DEVICE_PASSWORD,
+    DEFAULT_DEVICE_USERNAME,
 )
 from services.config_clone_service import DEFAULT_DOMAINS as CLONE_DEFAULT_DOMAINS
 
 
 class DeviceAdd(BaseModel):
-    """手动添加设备的请求体"""
+    """添加设备的请求体（支持自动分配 Console 端口并在 eNSP 中自动开机）"""
     name: str = Field(..., min_length=1, description="设备名称")
-    ip: str = Field(..., description="管理 IP 地址")
-    username: str = Field(default=DEFAULT_SSH_USERNAME)
-    password: str = Field(default=DEFAULT_SSH_PASSWORD)
+    ip: str = Field(default="", description="设备标识或本地地址（留空自动生成 127.0.0.1:<console_port>）")
+    model: str = Field(default="Router", description="eNSP 设备型号（Router/S5700/S3700/USG5500/AR2220/AR1220/AC6005/AP6050）")
+    username: str = Field(default=DEFAULT_DEVICE_USERNAME)
+    password: str = Field(default=DEFAULT_DEVICE_PASSWORD)
     device_type: str = Field(default=DEFAULT_DEVICE_TYPE)
-    console_port: Optional[int] = Field(default=None, description="eNSP 本地 Console 端口号（可选，用于零 IP 直连配置）")
+    console_port: Optional[int] = Field(default=None, description="eNSP 本地 Console 端口号（留空自动从 2000 起分配）")
+    auto_start: bool = Field(default=True, description="添加后是否自动同步 .topo 并在 eNSP 中自动开机")
+    cx: Optional[float] = Field(default=None, description="拓扑中横坐标（留空自动排布）")
+    cy: Optional[float] = Field(default=None, description="拓扑中纵坐标（留空自动排布）")
+    # 终端设备（PC/Laptop/MCS/STA）的网络参数；网络设备留空
+    ip_address: Optional[str] = Field(default=None, description="终端设备 IP 地址")
+    netmask: Optional[str] = Field(default=None, description="终端设备子网掩码")
+    gateway: Optional[str] = Field(default=None, description="终端设备网关")
+    revision: Optional[int] = Field(
+        default=None,
+        description="客户端持有的设备表版本号（乐观锁）；不匹配则拒绝写入，避免覆盖他人改动",
+    )
 
 
-class InterfaceSelect(BaseModel):
-    """选择管理网卡的请求体"""
-    name: str
-    ip: str
-    netmask: str
+class LinkEndpoint(BaseModel):
+    """连线的一个端点。"""
+    device: str = Field(..., min_length=1, description="设备名称")
+    interface: str = Field(..., min_length=1, description="接口名，如 GE0/0/0")
 
 
-class ScanRequest(BaseModel):
-    """扫描网段的请求体"""
-    subnet: str
+class LinkAdd(BaseModel):
+    """新增连线的请求体。"""
+    a: LinkEndpoint
+    b: LinkEndpoint
+
+
+class TopologyActivate(BaseModel):
+    """切换/新建拓扑的请求体。"""
+    name: str = Field(..., min_length=1, description="拓扑名称")
+
+
+class WorkspaceSet(BaseModel):
+    """设置工作目录的请求体。"""
+    path: str = Field(..., min_length=1, description="工作目录绝对路径")
+
+
+class EnspTopoApplyRequest(BaseModel):
+    """一键构建/加载拓扑并自动开机的请求体"""
+    preset: Optional[str] = Field(default=None, description="内置拓扑预设名，如 comprehensive_campus")
+    revision: Optional[int] = Field(
+        default=None,
+        description="客户端持有的设备表版本号（乐观锁）；仅加载预设时校验，不匹配则拒绝覆盖",
+    )
+    name: str = Field(default="active_workspace", description="拓扑名称")
+    devices: List[dict] = Field(default_factory=list, description="设备列表")
+    links: Optional[List[dict]] = Field(default=None, description="连线列表")
+    auto_start: bool = Field(default=True, description="是否自动启动全部设备")
+
+
+class PathTraceRequest(BaseModel):
+    """逻辑路径追踪请求体（需求④：数据包走向）。"""
+    source_ip: str = Field(..., description="源 IPv4（用于定位起始设备）")
+    dest_ip: str = Field(..., description="目的 IPv4")
+    device_ips: List[str] = Field(default_factory=list, description="参与追踪的设备 IP；留空=全部")
+    live: bool = Field(default=False, description="是否临时采集对应设备的表（缺采集数据时用）")
 
 
 class PingRequest(BaseModel):
@@ -44,16 +87,13 @@ class PingRequest(BaseModel):
     ip: str
 
 
-class DeviceDiscoverRequest(BaseModel):
-    """自动发现设备的请求体"""
-    subnet: Optional[str] = None
-    username: str = Field(default=DEFAULT_SSH_USERNAME)
-    password: str = Field(default=DEFAULT_SSH_PASSWORD)
-    device_type: str = Field(default=DEFAULT_DEVICE_TYPE)
-    replace: bool = True
-    ssh_identify: bool = True
-    dry_run: bool = False
-    max_workers: int = Field(default=50, ge=1, le=200)
+class EnspAttachRequest(BaseModel):
+    """把 eNSP 当前拓扑对齐到项目的请求体（需求②反向）。"""
+    mode: str = Field(
+        default="match_by_devices",
+        description="match_by_devices=按设备名匹配已有拓扑并切换；import_as=导入为新拓扑",
+    )
+    name: Optional[str] = Field(default=None, description="import_as 模式下新拓扑的名称（留空自动生成）")
 
 
 class ProtocolConfigRequest(BaseModel):

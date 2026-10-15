@@ -22,7 +22,7 @@ command_catalog.py - 声明式命令目录（表单化配置单一数据源）
 逐条校验该设备是否真的支持此指令，实现「设备支持什么」的自动发现。
 
 支持两种下发通道（均复用既有实现）：
-- SSH：deploy_service.deploy_config
+- 设备通道：domain.console.console_deploy
 - Console（零 IP）：main.console_deploy
 """
 

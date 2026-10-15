@@ -1,20 +1,18 @@
 """
-device_connector.py - SSH 设备连接工具模块
-==========================================
-提供统一的 Netmiko SSH 连接管理，供其他服务模块复用。
+device_connector.py - 设备连接工具模块（Console 直连模式）
+========================================================
+通过 eNSP 本地 Console 端口（127.0.0.1:<console_port>）直连设备。
 """
 
 import logging
 import re
-import socket
-from typing import Optional, Tuple, Any
+from typing import Any, Optional, Tuple
 
 logger = logging.getLogger("ensp-web.connector")
 
 # ANSI 转义序列：ESC[...字母（光标移动/清屏等）
 _ANSI_ESC_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
-# ESC 字节丢失后残留的光标移动片段，如 "[42D"（console 通道实测会出现，
-# 会把回显吃成 "isplay vlan" 这类残句，导致误判 Unrecognized command）
+# ESC 字节丢失后残留的光标移动片段，如 "[42D"
 _ANSI_RESIDUE_RE = re.compile(r"\[\d+[A-Za-z]")
 _BACKSPACE_RE = re.compile(r"\x08")
 
@@ -29,92 +27,85 @@ def strip_ansi(text: str) -> str:
     return text
 
 
-DEFAULT_SSH_USERNAME = "admin"
-DEFAULT_SSH_PASSWORD = "Huawei@123"
-DEFAULT_DEVICE_TYPE = "huawei"
-SSH_TIMEOUT = 10
+CONN_TIMEOUT = 10
 
 
-def import_netmiko() -> Tuple[Any, Any, Any]:
-    """兼容不同 Netmiko 版本的导入路径。"""
-    from netmiko import ConnectHandler
+def resolve_console_port(device: dict) -> int:
+    """从设备字典或 IP 标识（如 '127.0.0.1:2000'）解析本地 Console 端口号。"""
+    if not isinstance(device, dict):
+        return 2000
+    port = device.get("console_port") or device.get("com_port") or device.get("port")
+    if port:
+        try:
+            return int(port)
+        except (TypeError, ValueError):
+            pass
+
+    ip_str = str(device.get("ip") or device.get("host") or "").strip()
+    if ":" in ip_str:
+        try:
+            return int(ip_str.rsplit(":", 1)[1])
+        except (TypeError, ValueError):
+            pass
+
+    # 从 devices.json 查找匹配的设备记录
     try:
-        from netmiko.exceptions import NetMikoTimeoutException, NetMikoAuthenticationException
-    except ImportError:
-        from netmiko.ssh_exception import NetMikoTimeoutException, NetMikoAuthenticationException
-    return ConnectHandler, NetMikoTimeoutException, NetMikoAuthenticationException
+        from domain.device_store import load_devices
+
+        for d in load_devices():
+            if d.get("ip") == ip_str or d.get("name") == device.get("name"):
+                p = d.get("console_port") or d.get("com_port")
+                if p:
+                    return int(p)
+    except Exception:
+        pass
+
+    return 2000
 
 
-def build_conn_params(
-    device: dict,
-    timeout: int = SSH_TIMEOUT,
-    banner_timeout: Optional[int] = None,
-) -> dict:
-    """构建 Netmiko 连接参数字典。"""
+class ConsoleTimeoutError(TimeoutError):
+    """Console 连接或命令超时异常。"""
+
+
+class ConsoleAuthError(PermissionError):
+    """Console 认证失败异常。"""
+
+
+def ConsoleConnectHandler(**params) -> Any:
+    """本地 Console 连接工厂。"""
+    from domain.console_connection import ConsoleConnection
+
+    port = params.get("console_port") or resolve_console_port(params)
+    timeout = float(params.get("timeout") or CONN_TIMEOUT)
+    try:
+        return ConsoleConnection(port=int(port), timeout=timeout)
+    except OSError as e:
+        raise ConsoleTimeoutError(f"无法连接本地 Console 端口 127.0.0.1:{port}: {e}") from e
+
+
+def import_console() -> Tuple[Any, Any, Any]:
+    """返回 Console 连接器工厂及其超时/认证异常类型。"""
+    return ConsoleConnectHandler, ConsoleTimeoutError, ConsoleAuthError
+
+
+def build_conn_params(device: dict, timeout: int = CONN_TIMEOUT) -> dict:
+    """构建设备连接参数字典（包含解析后的 console_port）。"""
+    port = resolve_console_port(device)
     return {
-        "device_type": device.get("device_type", DEFAULT_DEVICE_TYPE),
-        "host": device["ip"],
-        "username": device.get("username", DEFAULT_SSH_USERNAME),
-        "password": device.get("password", DEFAULT_SSH_PASSWORD),
+        "console_port": port,
         "timeout": timeout,
         "conn_timeout": timeout,
-        "banner_timeout": banner_timeout or timeout,
-        "fast_cli": False,
     }
 
 
-def create_management_socket(
-    ip: str,
-    port: int = 22,
-    timeout: float = 1.0,
-    source_ip: Optional[str] = None,
-) -> socket.socket:
-    """创建绑定到管理网卡源地址的 TCP socket。"""
-    if source_ip:
-        return socket.create_connection((ip, port), timeout=timeout, source_address=(source_ip, 0))
-    return socket.create_connection((ip, port), timeout=timeout)
-
-
-def connect_device(
-    device: dict,
-    timeout: int = SSH_TIMEOUT,
-    source_ip: Optional[str] = None,
-    management_socket_factory=None,
-) -> Any:
-    """
-    建立 Netmiko SSH 连接并返回 connection 对象。
-
-    Args:
-        device: 设备字典（含 ip, username, password, device_type）
-        timeout: SSH 超时秒数
-        source_ip: 绑定管理源 IP（可选）
-        management_socket_factory: 可替换的 socket 创建函数
-
-    Returns:
-        Netmiko ConnectHandler 实例
-    """
-    ConnectHandler, _, _ = import_netmiko()
-    params = build_conn_params(device, timeout=timeout)
-
-    ssh_sock = None
-    if source_ip and management_socket_factory:
-        ssh_sock = management_socket_factory(device["ip"], 22, timeout=timeout)
-        params["sock"] = ssh_sock
-
-    try:
-        connection = ConnectHandler(**params)
-        return connection
-    except Exception:
-        if ssh_sock:
-            try:
-                ssh_sock.close()
-            except OSError:
-                pass
-        raise
+def connect_device(device: dict, timeout: int = CONN_TIMEOUT) -> Any:
+    """建立本地 Console 连接并返回 ConsoleConnection 对象。"""
+    ConnectHandler, _, _ = import_console()
+    return ConnectHandler(**build_conn_params(device, timeout=timeout))
 
 
 def safe_disconnect(connection: Any) -> None:
-    """安全断开 Netmiko 连接，忽略异常。"""
+    """安全断开连接，忽略异常。"""
     if connection:
         try:
             connection.disconnect()
@@ -123,31 +114,11 @@ def safe_disconnect(connection: Any) -> None:
 
 
 def ask_help_timing(connection: Any, command: str, read_timeout: int = 4) -> str:
-    """发送单独成行的 `?` 类命令并按 timing 模式读回帮助输出。
-
-    netmiko 对 `?` 的 send_command 路径依赖提示符匹配、不稳定，统一走
-    timing 模式（读到空闲即返回）；旧版 netmiko 无 read_timeout 参数时降级。
-    """
+    """发送单独成行的 `?` 类命令并按 timing 模式读回帮助输出。"""
     try:
-        return connection.send_command_timing(command, read_timeout=read_timeout,
-                                              delay_factor=1)
+        return connection.send_command_timing(command, read_timeout=read_timeout, delay_factor=1)
     except TypeError:
         return connection.send_command_timing(command, delay_factor=2)
-
-
-def run_display_command(connection: Any, command: str, read_timeout: int = 15) -> dict:
-    """
-    执行单条 display 命令并返回结果字典。
-
-    Returns:
-        {"success": bool, "output": str, "error": Optional[str]}
-    """
-    try:
-        output = connection.send_command(command, read_timeout=read_timeout)
-        return command_result_from_output(output)
-    except Exception as e:
-        error_msg = str(e)
-        return {"success": False, "output": "", "error": error_msg}
 
 
 _CLI_ERROR_PATTERNS = (

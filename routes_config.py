@@ -13,6 +13,7 @@ from typing import List
 from typing import Optional
 import concurrent.futures
 import ipaddress
+import threading
 import time
 import uuid
 
@@ -28,14 +29,16 @@ from app.models import (
 from app.state import state
 from domain.console import console_deploy
 from domain.device_store import load_devices
-from domain.netprobe import _create_management_socket, _management_source_ip_for
+
 from services.backup_service import backup_device_config, get_backup_content, list_backups
+from services.batch_variables import SeriesError
 from services.command_catalog import (
     get_catalog_entries,
     get_categories,
     render_catalog_commands,
     render_catalog_verify,
 )
+from services.command_complete import complete_commands
 from services.command_probe import cache_key, get_cached_probe, probe_device_commands
 from services.config_builder import (
     build_config_commands,
@@ -50,6 +53,7 @@ from services.config_clone_service import (
     build_clone_preview,
 )
 from services.conflict_detector import check_cross_device_conflicts
+from services.device_connector import resolve_console_port
 from services.deploy_service import deploy_config, deploy_raw_commands
 from services.free_config_executor import execute_free_deploy
 from services.free_config_renderer import render_preview, validate_task
@@ -58,6 +62,17 @@ from services.task_history_service import generate_task_id, save_task_record
 
 router = APIRouter()
 
+class VariableSeriesSpec(BaseModel):
+    """变量序列：同一模板按序号展开成逐台变量（需求⑧）。"""
+    base: Dict[str, Any] = Field(..., description="变量名 → 模板字符串，支持 {i} / {i:02d} / {ip_last} / {ip}")
+    start: int = Field(default=1, description="序号起始值")
+    step: int = Field(default=1, description="序号步长")
+    width: int = Field(default=0, description="补零宽度（0=不补零）")
+    per_device_overrides: Dict[str, Dict[str, Any]] = Field(
+        default_factory=dict, description="个别设备偏离序列: {ip: {var: value}}"
+    )
+
+
 class FreePreviewRequest(BaseModel):
     task_name: str = ""
     target_devices: List[str]
@@ -65,6 +80,9 @@ class FreePreviewRequest(BaseModel):
     global_vars: Dict[str, Any] = {}
     device_vars: Dict[str, Dict[str, Any]] = {}
     verify_commands: List[str] = []
+    series: Optional[VariableSeriesSpec] = Field(
+        default=None, description="变量序列；给出后按目标设备顺序展开，device_vars 作为手填覆盖"
+    )
 
 
 class FreeDeployRequest(FreePreviewRequest):
@@ -72,13 +90,11 @@ class FreeDeployRequest(FreePreviewRequest):
     stop_on_error: bool = True
     force: bool = False
 
-
 @router.get("/api/config-templates")
 async def list_config_templates(role: Optional[str] = None):
     """返回所有配置模板（表单定义），供前端协议配置模态框统一渲染（消除前端硬编码）。"""
     templates = get_templates_for_role(role) if role else get_all_templates()
     return {"success": True, "templates": templates, "categories": get_categories()}
-
 
 @router.post("/api/devices/{ip}/backup")
 async def create_device_backup(ip: str):
@@ -88,23 +104,18 @@ async def create_device_backup(ip: str):
     if not device:
         raise HTTPException(status_code=404, detail=f"未找到 IP 为 {ip} 的设备")
 
-    source_ip = _management_source_ip_for(ip)
     result = backup_device_config(
         device,
-        source_ip=source_ip,
-        management_socket_factory=_create_management_socket,
     )
     if not result["success"]:
         raise HTTPException(status_code=500, detail=f"备份失败: {result.get('error', '未知错误')}")
     return {"success": True, **result}
-
 
 @router.get("/api/devices/{ip}/backups")
 async def get_device_backups(ip: str):
     """查看指定设备历史备份列表。"""
     backups = list_backups(ip)
     return {"success": True, "ip": ip, "backups": backups}
-
 
 # ---------------------------------------------------------------------------
 # 配置下发 API
@@ -118,7 +129,6 @@ def _cached_full_config(ip: str) -> str:
         return command["output"]
     return ""
 
-
 def _load_config_for_clone(device: dict, refresh: bool = True) -> dict:
     """
     获取配置复制所需的完整配置。
@@ -129,11 +139,8 @@ def _load_config_for_clone(device: dict, refresh: bool = True) -> dict:
     errors = []
 
     if refresh:
-        source_ip = _management_source_ip_for(ip)
         backup = backup_device_config(
             device,
-            source_ip=source_ip,
-            management_socket_factory=_create_management_socket,
         )
         if backup.get("success") and backup.get("filepath"):
             try:
@@ -179,7 +186,6 @@ def _load_config_for_clone(device: dict, refresh: bool = True) -> dict:
         "errors": errors or ["没有可用的完整配置"],
     }
 
-
 def _clone_role_warnings(source_ip: str, target_ips: List[str]) -> List[str]:
     warnings = []
     capabilities = state.get("capability_results", {})
@@ -192,7 +198,6 @@ def _clone_role_warnings(source_ip: str, target_ips: List[str]) -> List[str]:
                 "不兼容接口或功能会被跳过，但仍需检查业务语义"
             )
     return warnings
-
 
 def _reserved_ips_from_collection() -> set:
     """从所有已采集设备中提取地址，供配置复制自动分配时避让。"""
@@ -208,7 +213,6 @@ def _reserved_ips_from_collection() -> set:
                     pass
     return reserved
 
-
 @router.post("/api/devices/{ip}/config/preview")
 async def preview_config(ip: str, req: ConfigPreviewRequest):
     """生成配置预览（不连接设备）。"""
@@ -216,7 +220,6 @@ async def preview_config(ip: str, req: ConfigPreviewRequest):
     if not preview["commands"]:
         raise HTTPException(status_code=400, detail=preview.get("error", "参数不完整"))
     return {"success": True, **preview}
-
 
 @router.post("/api/devices/{ip}/config/deploy")
 async def deploy_device_config(ip: str, req: ConfigDeployRequest):
@@ -232,21 +235,19 @@ async def deploy_device_config(ip: str, req: ConfigDeployRequest):
 
     verify_cmds = get_verify_commands(req.config_type, req.params)
 
-    source_ip = _management_source_ip_for(ip)
     result = deploy_config(
         device=device,
         commands=commands,
         verify_commands=verify_cmds,
         save_config=req.save_config,
-        source_ip=source_ip,
-        management_socket_factory=_create_management_socket,
     )
 
     if not result["success"] and result.get("error"):
         raise HTTPException(status_code=500, detail=f"配置下发失败: {result['error']}")
 
+    if result.get("success"):
+        _refresh_after_deploy([ip])
     return {"success": True, **result}
-
 
 @router.get("/api/config/clone/domains")
 async def get_clone_domains():
@@ -258,7 +259,6 @@ async def get_clone_domains():
             for domain in CLONE_DOMAIN_NAMES
         ],
     }
-
 
 @router.post("/api/config/clone/preview")
 async def preview_clone_config(req: ClonePreviewRequest):
@@ -356,7 +356,6 @@ async def preview_clone_config(req: ClonePreviewRequest):
     }
     return clone_result
 
-
 @router.post("/api/config/clone/deploy")
 async def deploy_clone_config(req: CloneDeployRequest):
     """下发已预览的设备配置复制方案。"""
@@ -400,8 +399,6 @@ async def deploy_clone_config(req: CloneDeployRequest):
         task=task,
         preview=rendered_preview,
         devices=load_devices(),
-        source_ip_func=_management_source_ip_for,
-        socket_factory=_create_management_socket,
     )
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -425,6 +422,10 @@ async def deploy_clone_config(req: CloneDeployRequest):
         "clone_preview_id": req.preview_id,
     })
 
+    clone_succeeded = [ip for ip, r in exec_result["results"].items() if r.get("success")]
+    if clone_succeeded:
+        _refresh_after_deploy(clone_succeeded)
+
     return {
         "success": exec_result["success"],
         "task_id": task_id,
@@ -432,7 +433,6 @@ async def deploy_clone_config(req: CloneDeployRequest):
         "results": exec_result["results"],
         "summary": exec_result["summary"],
     }
-
 
 @router.post("/api/devices/{ip}/config/raw-preview")
 async def preview_raw_config(ip: str, req: RawPreviewRequest):
@@ -445,7 +445,6 @@ async def preview_raw_config(ip: str, req: RawPreviewRequest):
         "preview_commands": req.commands,
         "warning": "高级命令模式：请确认命令正确性，下发前系统会自动备份当前配置",
     }
-
 
 @router.post("/api/devices/{ip}/config/raw-deploy")
 async def deploy_raw_config(ip: str, req: RawDeployRequest):
@@ -460,20 +459,18 @@ async def deploy_raw_config(ip: str, req: RawDeployRequest):
     if not device:
         raise HTTPException(status_code=404, detail=f"未找到 IP 为 {ip} 的设备")
 
-    source_ip = _management_source_ip_for(ip)
     result = deploy_raw_commands(
         device=device,
         raw_commands=req.commands,
         save_config=req.save_config,
-        source_ip=source_ip,
-        management_socket_factory=_create_management_socket,
     )
 
     if not result["success"] and result.get("error"):
         raise HTTPException(status_code=500, detail=f"原始命令下发失败: {result['error']}")
 
+    if result.get("success"):
+        _refresh_after_deploy([ip])
     return {"success": True, **result}
-
 
 # ---------------------------------------------------------------------------
 # Console 端口直连配置 API（无需设备 IP，零配置设备初始化）
@@ -486,19 +483,16 @@ class ConsoleConfigRequest(BaseModel):
     params: dict = Field(default={}, description="表单参数")
     save_config: bool = False
 
-
 class ConsoleRawRequest(BaseModel):
     """通过 Console 端口下发原始命令（零 IP，高级模式）。"""
     console_port: int = Field(..., description="eNSP 本地 Console 端口号")
     commands: List[str] = Field(default=[], description="原始命令列表（每行一条）")
     save_config: bool = False
 
-
 @router.post("/api/console-config/preview")
 async def preview_console_config(req: ConsoleRawRequest):
     """预览 Console 直连配置命令（不连接设备）。"""
     return {"success": True, "commands": req.commands}
-
 
 @router.post("/api/console-config/deploy")
 async def deploy_console_config(req: ConsoleConfigRequest):
@@ -515,8 +509,8 @@ async def deploy_console_config(req: ConsoleConfigRequest):
     )
     if not result["success"] and result.get("error"):
         raise HTTPException(status_code=500, detail=f"Console 配置下发失败: {result['error']}")
+    _refresh_after_deploy(_ips_by_console_port(req.console_port))
     return {"success": True, **result}
-
 
 @router.post("/api/console-config/raw-deploy")
 async def deploy_console_raw(req: ConsoleRawRequest):
@@ -532,8 +526,8 @@ async def deploy_console_raw(req: ConsoleRawRequest):
     result["raw_mode"] = True
     if not result["success"] and result.get("error"):
         raise HTTPException(status_code=500, detail=f"Console 配置下发失败: {result['error']}")
+    _refresh_after_deploy(_ips_by_console_port(req.console_port))
     return {"success": True, **result}
-
 
 # ---------------------------------------------------------------------------
 # 命令目录 API（声明式表单化配置单一数据源）
@@ -543,14 +537,12 @@ class CatalogRenderRequest(BaseModel):
     key: str = Field(..., description="命令目录条目 key")
     params: dict = Field(default={}, description="表单参数")
 
-
 class CatalogDeployRequest(BaseModel):
     key: str = Field(..., description="命令目录条目 key")
     params: dict = Field(default={}, description="表单参数")
-    target_ip: Optional[str] = Field(None, description="目标设备 IP（SSH 通道）")
+    target_ip: Optional[str] = Field(None, description="目标设备标识（127.0.0.1:<port>）")
     console_port: Optional[int] = Field(None, description="Console 端口（零 IP 通道）")
     save_config: bool = False
-
 
 @router.get("/api/command-catalog")
 async def list_command_catalog(role: Optional[str] = None, device_type: Optional[str] = None):
@@ -560,7 +552,6 @@ async def list_command_catalog(role: Optional[str] = None, device_type: Optional
         "categories": get_categories(),
         "entries": get_catalog_entries(role, device_type),
     }
-
 
 @router.post("/api/command-catalog/render")
 async def render_command_catalog(req: CatalogRenderRequest):
@@ -575,17 +566,20 @@ async def render_command_catalog(req: CatalogRenderRequest):
         "warnings": warnings,
     }
 
-
 @router.post("/api/command-catalog/deploy")
 async def deploy_command_catalog(req: CatalogDeployRequest):
-    """通过命令目录下发配置：渲染后走 SSH 或 Console 通道。"""
+    """通过命令目录下发配置：渲染后经本地 Console 下发。"""
     commands, warnings, errors = render_catalog_commands(req.key, req.params)
     if errors:
         raise HTTPException(status_code=400, detail="; ".join(errors))
 
     verify_cmds = render_catalog_verify(req.key, req.params)
 
-    # 零 IP 通道优先：给了 console_port 就走 Console
+    # 由设备标识（127.0.0.1:port）或显式 console_port 解析目标端口
+    if req.console_port is None and req.target_ip:
+        dev = next((d for d in load_devices() if d["ip"] == req.target_ip), None)
+        if dev:
+            req.console_port = dev.get("console_port") or resolve_console_port(dev)
     if req.console_port is not None:
         result = console_deploy(
             console_port=req.console_port,
@@ -596,41 +590,20 @@ async def deploy_command_catalog(req: CatalogDeployRequest):
         result["channel"] = "console"
         if not result["success"] and result.get("error"):
             raise HTTPException(status_code=500, detail=f"命令目录下发失败: {result['error']}")
+        refresh_ips = [req.target_ip] if req.target_ip else _ips_by_console_port(req.console_port)
+        _refresh_after_deploy(refresh_ips)
         return {"success": True, **result}
 
-    # 否则走 SSH 通道
-    if not req.target_ip:
-        raise HTTPException(status_code=400, detail="请指定 target_ip 或 console_port")
-    devices = load_devices()
-    device = next((d for d in devices if d["ip"] == req.target_ip), None)
-    if not device:
-        raise HTTPException(status_code=404, detail=f"未找到 IP 为 {req.target_ip} 的设备")
-
-    source_ip = _management_source_ip_for(req.target_ip)
-    result = deploy_config(
-        device=device,
-        commands=commands,
-        verify_commands=verify_cmds,
-        save_config=req.save_config,
-        source_ip=source_ip,
-        management_socket_factory=_create_management_socket,
-    )
-    result["channel"] = "ssh"
-    if not result["success"] and result.get("error"):
-        raise HTTPException(status_code=500, detail=f"命令目录下发失败: {result['error']}")
-    return {"success": True, **result}
-
+    raise HTTPException(status_code=400, detail="请指定 target_ip 或 console_port")
 
 # ---------------------------------------------------------------------------
 # 命令目录 ? 探测引导 API（后台执行 + 缓存，做到无感知）
 # ---------------------------------------------------------------------------
 _catalog_probe_jobs: Dict[str, dict] = {}  # job_id -> {"status","result","error"}
 
-
 class CatalogProbeRequest(BaseModel):
-    target: dict = Field(..., description="探测目标：SSH={mode:'ssh',ip,...} / Console={mode:'console',port,...}")
+    target: dict = Field(..., description="探测目标：{ip, console_port} 或 {port}")
     force: bool = Field(False, description="强制重新探测（忽略缓存）")
-
 
 @router.post("/api/command-catalog/probe")
 async def probe_catalog(req: CatalogProbeRequest, background_tasks: BackgroundTasks):
@@ -646,23 +619,19 @@ async def probe_catalog(req: CatalogProbeRequest, background_tasks: BackgroundTa
         return {"success": True, "status": "done", "from_cache": True,
                 "device_type": cached.get("device_type"), "result": cached}
 
-    # SSH 目标若只给 IP，自动从设备清单补全凭据，避免前端传递密码
+    # 设备目标若只给 IP，自动从设备清单补全 Console 端口
     target = dict(req.target)
-    if target.get("mode") == "ssh" and target.get("ip") and not (
-        target.get("username") and target.get("password")
-    ):
+    if target.get("ip") and not target.get("console_port"):
         dev = next((d for d in load_devices() if d.get("ip") == target.get("ip")), None)
-        if dev:
-            target.setdefault("username", dev.get("username"))
-            target.setdefault("password", dev.get("password"))
-            target.setdefault("device_type", dev.get("device_type", "huawei"))
+        if dev and dev.get("console_port"):
+            target["console_port"] = dev["console_port"]
 
     job_id = uuid.uuid4().hex
     _catalog_probe_jobs[job_id] = {"status": "probing", "result": None, "error": None}
 
     def _run():
         try:
-            res = probe_device_commands(req.target, force=True)
+            res = probe_device_commands(target, force=True)
             _catalog_probe_jobs[job_id] = {"status": "done", "result": res, "error": None}
         except Exception as e:  # pragma: no cover
             logger.exception("命令目录 ? 探测失败")
@@ -670,7 +639,6 @@ async def probe_catalog(req: CatalogProbeRequest, background_tasks: BackgroundTa
 
     background_tasks.add_task(_run)
     return {"success": True, "status": "probing", "job_id": job_id, "from_cache": False}
-
 
 @router.get("/api/command-catalog/probe/{job_id}")
 async def probe_catalog_result(job_id: str):
@@ -685,16 +653,121 @@ async def probe_catalog_result(job_id: str):
         "error": job.get("error"),
     }
 
+@router.get("/api/command-complete")
+async def complete_command(ip: Optional[str] = None, prefix: str = "", view: Optional[str] = None,
+                           device_type: Optional[str] = None):
+    """命令上下文补全：只读探测缓存，不新增采集。"""
+    target: Dict[str, Any] = {}
+    if ip:
+        dev = next((d for d in load_devices() if d.get("ip") == ip), None)
+        if dev:
+            target = {
+                "ip": dev.get("ip"),
+                "console_port": dev.get("console_port") or resolve_console_port(dev),
+            }
+        else:
+            target = {"ip": ip}
+    result = complete_commands(target, prefix, view=view, device_type=device_type)
+    return {"success": True, **result}
+
+def _ips_by_console_port(port: int) -> List[str]:
+    """Console 端口 → 设备 IP 列表（Console 通道只有端口号，要反查才能刷新采集）。"""
+    try:
+        return [d.get("ip") for d in load_devices()
+                if d.get("console_port") == port and d.get("ip")]
+    except Exception:
+        return []
+
+
+def _refresh_after_deploy(ips: List[str], with_capabilities: bool = True) -> None:
+    """
+    下发成功后刷新这些设备的采集结果，并（默认）重跑能力识别。
+
+    「协议角色」页的数据源是 capability_results（不是 collection_results），
+    所以只刷采集不够——不重跑能力识别，角色页看到的还是下发前的旧状态。
+    两者都刷，页面才真的"开箱即最新"。
+
+    在**后台线程**里做：下发接口已经要返回结果了，不能让采集/探测拖住响应；
+    失败只记日志，不影响下发本身的结果。
+    """
+    from app.state import record_collection
+    from domain.collect import collect_device as _collect
+    from services.capability_probe import probe_capabilities_from_cache
+
+    targets = [ip for ip in ips if ip]
+    if not targets:
+        return
+
+    def _run() -> None:
+        import time
+        for ip in targets:
+            device = next((d for d in load_devices() if d.get("ip") == ip), None)
+            if not device:
+                continue
+            try:
+                result = _collect(device)
+                if result:
+                    record_collection(ip, result)
+            except Exception as e:
+                logger.warning("下发后刷新 %s 采集失败: %s", ip, e)
+                continue
+            if not with_capabilities:
+                continue
+            try:
+                # 用刚采到的结果零连接重算能力（不额外连设备），
+                # 让「协议角色」页立刻反映刚下发的配置。
+                cap = probe_capabilities_from_cache(
+                    state["collection_results"].get(ip) or {}, device=device)
+                if cap and cap.get("ok"):
+                    state["capability_results"][ip] = cap
+            except Exception as e:
+                logger.warning("下发后刷新 %s 能力识别失败: %s", ip, e)
+            # 每台之间让一步：批量下发十几台时，别把前台请求全堵在后面
+            time.sleep(0.3)
+
+        if with_capabilities and state.get("capability_results"):
+            try:
+                from services import state_persist
+                state_persist.save_capability_cache(state["capability_results"])
+            except Exception as e:
+                logger.warning("能力缓存落盘失败: %s", e)
+
+    threading.Thread(target=_run, daemon=True, name="post-deploy-refresh").start()
+
+
+def _expand_series_if_any(req: FreePreviewRequest, devices: List[dict]) -> dict:
+    """把请求里的 series 展开成 device_vars；没有 series 时原样返回。
+
+    序号只按 **target_devices 的顺序**分配（第 1 个目标拿 start，
+    第 2 个拿 start+step ...），与设备表整体顺序无关——否则勾选 5 台设备时
+    序号会从它们在设备表里的位置起算，用户完全无法预期。
+
+    优先级：手填 device_vars > 序列展开（便于"先批量生成、再单独微调一台"）。
+    """
+    if req.series is None:
+        return req.device_vars
+    from services.batch_variables import expand_variable_series, merge_series_into_device_vars
+    by_ip = {d.get("ip"): d for d in devices}
+    ordered = [by_ip.get(ip, ip) for ip in req.target_devices]
+    expanded = expand_variable_series(req.series.model_dump(), ordered)
+    return merge_series_into_device_vars(expanded["device_vars"], req.device_vars)
+
 
 @router.post("/api/config/free-preview")
 async def free_config_preview(req: FreePreviewRequest):
     """自由配置预览：变量替换 + 批量冲突检测，不连接设备。"""
+    devices = load_devices()
+    try:
+        device_vars = _expand_series_if_any(req, devices)
+    except SeriesError as e:
+        return {"success": False, "preview": {}, "errors": [str(e)], "warnings": []}
+
     task = {
         "task_name": req.task_name,
         "target_devices": req.target_devices,
         "command_template": req.command_template,
         "global_vars": req.global_vars,
-        "device_vars": req.device_vars,
+        "device_vars": device_vars,
         "verify_commands": req.verify_commands,
     }
 
@@ -731,18 +804,23 @@ async def free_config_preview(req: FreePreviewRequest):
 
     return result
 
-
 @router.post("/api/config/free-deploy")
 async def free_config_deploy(req: FreeDeployRequest):
     """自由配置下发：备份 + 下发 + 验证 + 可选保存。"""
     from datetime import datetime
+
+    devices = load_devices()
+    try:
+        device_vars = _expand_series_if_any(req, devices)
+    except SeriesError as e:
+        return {"success": False, "errors": [str(e)]}
 
     task = {
         "task_name": req.task_name,
         "target_devices": req.target_devices,
         "command_template": req.command_template,
         "global_vars": req.global_vars,
-        "device_vars": req.device_vars,
+        "device_vars": device_vars,
         "verify_commands": req.verify_commands,
         "save_after_success": req.save_after_success,
         "stop_on_error": req.stop_on_error,
@@ -791,7 +869,7 @@ async def free_config_deploy(req: FreeDeployRequest):
                 "hint": "如需强制执行，请设置 force=true",
             }
 
-    # 获取设备列表
+    # 获取设备列表（series 展开也要用同一份）
     devices = load_devices()
     device_ips = {d["ip"] for d in devices}
     for ip in req.target_devices:
@@ -806,8 +884,6 @@ async def free_config_deploy(req: FreeDeployRequest):
         task=task,
         preview=preview_result["preview"],
         devices=devices,
-        source_ip_func=_management_source_ip_for,
-        socket_factory=_create_management_socket,
     )
     end_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -830,6 +906,11 @@ async def free_config_deploy(req: FreeDeployRequest):
     }
     save_task_record(record)
 
+    # 下发成功过的设备：后台刷新采集结果，让协议角色页立刻反映新状态
+    succeeded = [ip for ip, r in exec_result["results"].items() if r.get("success")]
+    if succeeded:
+        _refresh_after_deploy(succeeded)
+
     return {
         "success": exec_result["success"],
         "task_id": task_id,
@@ -839,7 +920,6 @@ async def free_config_deploy(req: FreeDeployRequest):
         "warnings": preview_result.get("warnings", []),
     }
 
-
 # ---------------------------------------------------------------------------
 # 智能默认值 & 批量冲突检测
 # ---------------------------------------------------------------------------
@@ -848,17 +928,14 @@ class SmartDefaultsRequest(BaseModel):
     target_devices: List[str] = []
     config_type: str = ""
 
-
 class NetworkWildcardRequest(BaseModel):
     network: str = ""
-
 
 class BatchConflictRequest(BaseModel):
     target_devices: List[str] = []
     command_template: Any = []
     global_vars: Dict[str, Any] = {}
     device_vars: Dict[str, Dict[str, Any]] = {}
-
 
 @router.post("/api/config/smart-defaults")
 async def get_smart_defaults(req: SmartDefaultsRequest):
@@ -876,7 +953,6 @@ async def get_smart_defaults(req: SmartDefaultsRequest):
 
     return {"success": True, "defaults": defaults}
 
-
 @router.post("/api/utils/network-to-wildcard")
 async def api_network_to_wildcard(req: NetworkWildcardRequest):
     """
@@ -890,7 +966,6 @@ async def api_network_to_wildcard(req: NetworkWildcardRequest):
         return {"success": True, "wildcard": wildcard}
     else:
         return {"success": False, "wildcard": None, "error": f"无法解析网络地址: {req.network}"}
-
 
 @router.post("/api/config/check-batch-conflicts")
 async def api_check_batch_conflicts(req: BatchConflictRequest):
@@ -930,5 +1005,4 @@ async def api_check_batch_conflicts(req: BatchConflictRequest):
     )
 
     return {"success": True, "conflicts": conflicts}
-
 

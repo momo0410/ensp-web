@@ -51,7 +51,7 @@ function DeviceCard({ ip, result }: { ip: string; result: CollectionResult }) {
               <Text size="xs" c="dimmed">CPU: {info.cpu_usage || "-"}</Text>
               <Text size="xs" c="dimmed">MEM: {info.memory_usage || "-"}</Text>
               <OnlineBadge ok={result.online} />
-              <OnlineBadge ok={result.ssh_ok} okText="SSH 已连接" failText={`SSH ${result.ssh_error || "失败"}`} unknownText="SSH 未采集" />
+              <OnlineBadge ok={result.ok} okText="已连接" failText={`连接${result.error || "失败"}`} unknownText="未采集" />
               {protocols.length
                 ? protocols.map((p: string) => (
                   <Badge key={p} color="blue" variant="light" size="sm" title={`${(PROTOCOL_NAMES as Record<string, string>)[p] || p} 已配置`}>

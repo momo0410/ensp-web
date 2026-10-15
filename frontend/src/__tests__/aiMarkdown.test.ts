@@ -86,7 +86,7 @@ describe("localFallback（无 Key 本地降级）", () => {
     const timeout = localFallback("diagnose", "10.0.0.1", {
       lastDeploy: { ip: "", success: false, error: "connect timed out", outputs: "" },
     })
-    expect(timeout).toContain("SSH 会话超时")
+    expect(timeout).toContain("Console 会话超时")
     const auth = localFallback("diagnose", "10.0.0.1", {
       lastDeploy: { ip: "", success: false, error: "authentication failed", outputs: "" },
     })

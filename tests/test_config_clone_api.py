@@ -3,9 +3,7 @@ import time
 
 import main
 import routes_config
-from services.access_guard import ACCESS_TOKEN
 
-# 访问令牌启用后，TestClient 请求需携带令牌头
 FAKE_DEVICES = [
     {"ip": "192.168.56.11", "name": "AR1"},
     {"ip": "192.168.56.12", "name": "AR2"},
@@ -13,9 +11,7 @@ FAKE_DEVICES = [
 
 
 def _client():
-    client = TestClient(main.app)
-    client.headers["X-Access-Token"] = ACCESS_TOKEN
-    return client
+    return TestClient(main.app)
 
 
 SOURCE = """

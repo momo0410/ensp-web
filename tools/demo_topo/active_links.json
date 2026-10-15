@@ -1,0 +1,162 @@
+[
+  {
+    "a": {
+      "device": "FW1",
+      "interface": "GE0/0/0"
+    },
+    "b": {
+      "device": "R1",
+      "interface": "GE0/0/2"
+    }
+  },
+  {
+    "a": {
+      "device": "FW1",
+      "interface": "GE0/0/1"
+    },
+    "b": {
+      "device": "R3",
+      "interface": "GE0/0/2"
+    }
+  },
+  {
+    "a": {
+      "device": "R1",
+      "interface": "GE0/0/0"
+    },
+    "b": {
+      "device": "R2",
+      "interface": "GE0/0/0"
+    }
+  },
+  {
+    "a": {
+      "device": "R1",
+      "interface": "GE0/0/1"
+    },
+    "b": {
+      "device": "R3",
+      "interface": "GE0/0/1"
+    }
+  },
+  {
+    "a": {
+      "device": "R2",
+      "interface": "GE0/0/3"
+    },
+    "b": {
+      "device": "R3",
+      "interface": "GE0/0/3"
+    }
+  },
+  {
+    "a": {
+      "device": "R1",
+      "interface": "GE0/0/3"
+    },
+    "b": {
+      "device": "SW1",
+      "interface": "GE0/0/1"
+    }
+  },
+  {
+    "a": {
+      "device": "R2",
+      "interface": "GE0/0/1"
+    },
+    "b": {
+      "device": "SW2",
+      "interface": "GE0/0/1"
+    }
+  },
+  {
+    "a": {
+      "device": "R3",
+      "interface": "GE0/0/0"
+    },
+    "b": {
+      "device": "SW3",
+      "interface": "GE0/0/1"
+    }
+  },
+  {
+    "a": {
+      "device": "R2",
+      "interface": "GE0/0/2"
+    },
+    "b": {
+      "device": "AC1",
+      "interface": "GE0/0/1"
+    }
+  },
+  {
+    "a": {
+      "device": "AC1",
+      "interface": "GE0/0/2"
+    },
+    "b": {
+      "device": "AP1",
+      "interface": "GE0/0/0"
+    }
+  },
+  {
+    "a": {
+      "device": "SW1",
+      "interface": "GE0/0/2"
+    },
+    "b": {
+      "device": "SW4",
+      "interface": "GE0/0/1"
+    }
+  },
+  {
+    "a": {
+      "device": "SW2",
+      "interface": "GE0/0/2"
+    },
+    "b": {
+      "device": "SW5",
+      "interface": "GE0/0/1"
+    }
+  },
+  {
+    "a": {
+      "device": "SW3",
+      "interface": "GE0/0/2"
+    },
+    "b": {
+      "device": "SW6",
+      "interface": "GE0/0/1"
+    }
+  },
+  {
+    "a": {
+      "device": "SW4",
+      "interface": "Ethernet0/0/1"
+    },
+    "b": {
+      "device": "PC1",
+      "interface": "GE0/0/0"
+    }
+  },
+  {
+    "a": {
+      "device": "SW5",
+      "interface": "Ethernet0/0/1"
+    },
+    "b": {
+      "device": "PC2",
+      "interface": "GE0/0/0"
+    }
+  },
+  {
+    "a": {
+      "device": "SW6",
+      "interface": "Ethernet0/0/1"
+    },
+    "b": {
+      "device": "PC3",
+      "interface": "GE0/0/0"
+    }
+  }
+]

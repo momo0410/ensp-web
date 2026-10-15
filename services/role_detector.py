@@ -13,7 +13,7 @@ role_detector.py - 设备协议角色解析
 
 输入是**已有的能力探测结果**（capability_probe 的输出 dict，含
 raw_outputs / current-configuration / interfaces），纯字符串解析，
-零 SSH、零延迟。每个协议同时给出「填空配置」入口：
+零连接、零延迟。每个协议同时给出「填空配置」入口：
 
     config_key - config_builder 模板键（前端弹窗表单直接打开）
     presets    - 可自动推导的字段预填值（接口/IP/网段等）
@@ -26,6 +26,30 @@ import logging
 from typing import Dict, Any, List, Optional
 
 logger = logging.getLogger("ensp-web.role_detector")
+
+
+def _text(raw: Any, key: str) -> str:
+    """
+    从命令结果 dict 里取命令原文。
+
+    采集结果有两种形态，必须都兼容：
+      - `{"display ospf peer": "输出文本"}`（旧格式 / 手工构造的样例）
+      - `{"display ospf peer": {"success": True, "output": "输出文本"}}`
+        （domain/collect.py 的实际结构）
+    直接拿旧格式的 str 假设去解析，会在新结构上抛
+    `TypeError: expected string or bytes-like object, got 'dict'`。
+    """
+    if not isinstance(raw, dict):
+        return ""
+    value = raw.get(key, "")
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        for sub in ("output", "raw", "text"):
+            if isinstance(value.get(sub), str):
+                return value[sub]
+    return ""
+
 
 PROTOCOL_ROLE_NAMES: Dict[str, str] = {
     "vrrp": "VRRP", "ospf": "OSPF", "bgp": "BGP", "isis": "IS-IS",
@@ -131,7 +155,7 @@ def _role(role: str, detail: str = "", interface: str = "") -> dict:
 # ---------------------------------------------------------------------------
 def _detect_vrrp(cfg: str, raw: Dict[str, str], interfaces: List[dict]) -> List[dict]:
     roles = []
-    brief = raw.get("display vrrp brief", "") or ""
+    brief = _text(raw, "display vrrp brief")
     # Interface VRID Virtual-IP State ...
     for m in re.finditer(r"^(\S+)\s+(\d+)\s+(\d+\.\d+\.\d+\.\d+)\s+(\w+)", brief, re.M):
         roles.append(_role(m.group(4), f"VRID {m.group(2)} 虚IP {m.group(3)}",
@@ -149,7 +173,7 @@ def _detect_stp(cfg: str, raw: Dict[str, str]) -> List[dict]:
     m = re.search(r"stp mode (\w+)", cfg, re.I)
     if m:
         roles.append(_role(f"{m.group(1).upper()} 模式", "stp mode " + m.group(1)))
-    brief = raw.get("display stp brief", "") or ""
+    brief = _text(raw, "display stp brief")
     root = alte = desi = 0
     for line in brief.splitlines():
         cols = line.split()
@@ -222,7 +246,7 @@ def _detect_ospf(cfg: str, raw: Dict[str, str]) -> List[dict]:
         if areas:
             label = "骨干区域" if "0.0.0.0" in areas else "普通区域"
             roles.append(_role(label, "Area: " + ", ".join(areas)))
-    peers = raw.get("display ospf peer", "") or ""
+    peers = _text(raw, "display ospf peer")
     full = len(re.findall(r"Full", peers))
     if full:
         roles.append(_role("邻居正常", f"{full} 个 Full 邻居"))
@@ -236,7 +260,7 @@ def _detect_bgp(cfg: str, raw: Dict[str, str]) -> List[dict]:
     m = re.search(r"^bgp (\d+)", cfg, re.M)
     if m:
         roles.append(_role(f"AS {m.group(1)}", "bgp " + m.group(1)))
-        peers = raw.get("display bgp peer", "") or ""
+        peers = _text(raw, "display bgp peer")
         est = len(re.findall(r"Established", peers))
         roles.append(_role("邻居状态", f"{est} 个 Established 邻居" if est
                            else "无 Established 邻居"))
@@ -447,7 +471,11 @@ def detect_protocol_roles(cap_result: dict) -> dict:
         {"ip", "hostname", "device_role", "protocols": {key: {...}}, ...}
     """
     raw = cap_result.get("raw_outputs") or {}
-    cfg = raw.get("display current-configuration", "") or ""
+    # 各子解析器（_detect_ospf/_detect_vrrp 等）会直接对 raw 里的值做正则匹配，
+    # 而采集结果有两种形态（纯字符串 / {success,output} dict）。这里一次性
+    # 归一化成「命令 → 字符串」，否则任何 dict 值都会让 re 抛 TypeError。
+    raw = {cmd: _text(raw, cmd) for cmd in raw}
+    cfg = raw.get("display current-configuration", "")
     interfaces = cap_result.get("interfaces") or []
     caps = cap_result.get("capabilities") or {}
 

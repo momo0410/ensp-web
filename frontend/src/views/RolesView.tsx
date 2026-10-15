@@ -13,7 +13,7 @@ const STATUS_BADGES: Record<string, React.ReactNode> = {
 }
 
 export function RolesView() {
-  const { roleResults, analyzeRoles, setSection, setPendingFill } = useApp()
+  const { roleResults, roleNotProbed, analyzeRoles, setSection, setPendingFill } = useApp()
   const [analyzing, setAnalyzing] = useState(false)
   const results = Object.values(roleResults)
 
@@ -41,6 +41,18 @@ export function RolesView() {
         并提供"填空式"配置入口：点"填空配置"打开表单，系统已按设备现状预填接口/IP 等可推导项，补齐空格即可下发。
         需先完成能力识别。
       </Alert>
+
+      {roleNotProbed.length > 0 && (
+        <Alert variant="light" color="yellow" mb="md" title={`${roleNotProbed.length} 台设备还没做过能力识别`}>
+          <Text size="sm" mb={6}>
+            协议角色是从能力识别采到的设备配置里解析出来的，没识别过的设备不会有任何角色数据。
+            下面的设备尚未识别：{roleNotProbed.map((d) => d.name || d.ip).join("、")}
+          </Text>
+          <Button size="xs" variant="default" onClick={() => setSection("section-capabilities")}>
+            去「能力识别」页批量识别
+          </Button>
+        </Alert>
+      )}
 
       {results.length === 0 && <EmptyHint>暂无角色分析数据，请先执行能力识别，再点击"分析协议角色"</EmptyHint>}
       <Stack gap="sm">

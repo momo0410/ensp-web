@@ -29,7 +29,6 @@ _RX_RECEIVED = re.compile(r"(\d+)\s+packet\(s\)\s+received")
 _RX_LOSS = re.compile(r"([\d.]+)%\s+packet\s+loss")
 _RX_RTT = re.compile(r"round-trip\s+min/avg/max\s*=\s*([\d.]+)/([\d.]+)/([\d.]+)")
 
-
 def parse_ping_output(output: str) -> Dict[str, Any]:
     """从 VRP ping 回显解析统计结果。"""
     transmitted = received = 0
@@ -57,27 +56,22 @@ def parse_ping_output(output: str) -> Dict[str, Any]:
         "max_ms": rtt_max,
     }
 
-
 def ping_from_device(
     device: dict,
     target: str,
     count: int = 4,
     source: Optional[str] = None,
-    source_bind: Optional[str] = None,
-    management_socket_factory=None,
     timeout: int = 12,
     read_timeout: int = 30,
 ) -> Dict[str, Any]:
     """
-    通过 SSH 在设备上执行 ping。
+    通过本地 Console 在设备上执行 ping。
 
     Args:
-        device: 设备字典（ip/username/password/device_type）
+        device: 设备字典（ip / console_port）
         target: 目标 IPv4 或主机名
         count: 回显次数（1-20）
         source: VRP ping 的 -a 源地址（用于从指定网段发起，路由实验常用）
-        source_bind: 本机管理源 IP（SSH 连接绑定用）
-        management_socket_factory: 管理面 socket 工厂
     """
     target = (target or "").strip()
     if not _TARGET_RE.match(target):
@@ -109,19 +103,13 @@ def ping_from_device(
     result["transmitted"] = count
 
     from .device_connector import (
-        import_netmiko, build_conn_params, safe_disconnect, strip_ansi,
+        import_console, build_conn_params, safe_disconnect, strip_ansi,
     )
 
     conn = None
-    ssh_sock = None
     try:
-        ConnectHandler, _, _ = import_netmiko()
-        params = build_conn_params(device, timeout=timeout)
-        if source_bind and management_socket_factory:
-            ssh_sock = management_socket_factory(device["ip"], 22, timeout=timeout)
-            params["sock"] = ssh_sock
-        conn = ConnectHandler(**params)
-        ssh_sock = None
+        ConnectHandler, _, _ = import_console()
+        conn = ConnectHandler(**build_conn_params(device, timeout=timeout))
         conn.send_command_timing("screen-length 0 temporary", read_timeout=5)
         # ping 逐包回显间隔最长 2s/包，timing 模式按空闲读取
         output = conn.send_command_timing(command, read_timeout=read_timeout,
@@ -141,9 +129,4 @@ def ping_from_device(
         logger.warning("[%s] 设备侧 ping %s 失败: %s", device.get("ip"), target, e)
     finally:
         safe_disconnect(conn)
-        if ssh_sock:
-            try:
-                ssh_sock.close()
-            except OSError:
-                pass
     return result

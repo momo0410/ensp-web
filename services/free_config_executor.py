@@ -10,14 +10,13 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime
 
 from .device_connector import (
-    import_netmiko,
+    import_console,
     build_conn_params,
     safe_disconnect,
 )
 from .backup_service import backup_device_config
 
 logger = logging.getLogger("ensp-web.free-executor")
-
 
 def _save_device_config(conn, device_ip: str) -> Dict[str, Any]:
     """
@@ -27,7 +26,7 @@ def _save_device_config(conn, device_ip: str) -> Dict[str, Any]:
         {"success": bool, "message": str}
     """
     try:
-        # 先尝试 Netmiko 内置方法
+        # 优先用连接器的 save_config()
         conn.save_config()
         return {"success": True, "message": "配置已保存 (save_config)"}
     except Exception as e1:
@@ -41,15 +40,12 @@ def _save_device_config(conn, device_ip: str) -> Dict[str, Any]:
         except Exception as e2:
             return {"success": False, "message": f"保存失败: {e2}"}
 
-
 def execute_single_device(
     device: dict,
     commands: List[str],
     verify_commands: List[str],
     save_after: bool = False,
     stop_on_error: bool = True,
-    source_ip: Optional[str] = None,
-    socket_factory=None,
     timeout: int = 15,
     read_timeout: int = 30,
 ) -> Dict[str, Any]:
@@ -92,36 +88,30 @@ def execute_single_device(
     connection = None
 
     try:
-        ConnectHandler, NetMikoTimeoutException, NetMikoAuthenticationException = import_netmiko()
+        ConnectHandler, ConsoleTimeoutError, ConsoleAuthError = import_console()
 
         # Step 1: 备份
         logger.info("[%s] 开始备份配置", ip)
         try:
             backup_result = backup_device_config(
                 device,
-                source_ip=source_ip,
-                management_socket_factory=socket_factory,
             )
             if backup_result.get("success"):
                 result["backup_file"] = backup_result.get("filename")
                 logger.info("[%s] 备份完成: %s", ip, result["backup_file"])
             else:
-                result["errors"].append(f"备份失败: {backup_result.get('error', '未知错误')}")
-                if stop_on_error:
-                    result["duration"] = time.time() - start_time
-                    return result
+                # 备份失败只降级为警告，不阻断下发：交换机/防火墙的
+                # display current-configuration 输出量大，默认超时内读不完，
+                # 此时用户仍应能继续配置（可在设备详情页手动补备份）。
+                result["errors"].append(f"备份失败（不影响下发）: {backup_result.get('error', '未知错误')}")
+                logger.warning("[%s] 备份失败，继续下发: %s", ip, backup_result.get("error"))
         except Exception as e:
-            result["errors"].append(f"备份异常: {e}")
-            if stop_on_error:
-                result["duration"] = time.time() - start_time
-                return result
+            result["errors"].append(f"备份异常（不影响下发）: {e}")
+            logger.warning("[%s] 备份异常，继续下发: %s", ip, e)
 
         # Step 2: 连接设备
         logger.info("[%s] 连接设备", ip)
         params = build_conn_params(device, timeout=timeout)
-        if source_ip and socket_factory:
-            ssh_sock = socket_factory(ip, 22, timeout=timeout)
-            params["sock"] = ssh_sock
 
         connection = ConnectHandler(**params)
 
@@ -180,13 +170,13 @@ def execute_single_device(
             result["success"] = len(result["errors"]) == 0
 
     except ImportError:
-        result["errors"].append("Netmiko 未安装")
+        result["errors"].append("Console 连接器不可用")
     except Exception as e:
         err_name = type(e).__name__
         if "Timeout" in err_name:
-            result["errors"].append(f"SSH 连接超时: {e}")
+            result["errors"].append(f"Console 连接超时: {e}")
         elif "Authentication" in err_name:
-            result["errors"].append(f"SSH 认证失败: {e}")
+            result["errors"].append(f"Console 认证失败: {e}")
         else:
             result["errors"].append(str(e))
         logger.error("[%s] 执行失败: %s", ip, e)
@@ -196,13 +186,10 @@ def execute_single_device(
 
     return result
 
-
 def execute_free_deploy(
     task: Dict[str, Any],
     preview: Dict[str, Any],
     devices: List[dict],
-    source_ip_func=None,
-    socket_factory=None,
     timeout: int = 15,
     read_timeout: int = 30,
 ) -> Dict[str, Any]:
@@ -213,9 +200,7 @@ def execute_free_deploy(
         task: 配置任务
         preview: 预览结果 {ip: {"commands": [...]}}
         devices: 设备列表
-        source_ip_func: 获取源 IP 的函数
-        socket_factory: socket 工厂
-        timeout: SSH 超时
+        timeout: 连接超时
         read_timeout: 命令读取超时
 
     Returns:
@@ -262,7 +247,6 @@ def execute_free_deploy(
             continue
 
         commands = preview[ip]["commands"]
-        source_ip = source_ip_func(ip) if source_ip_func else None
 
         result = execute_single_device(
             device=device,
@@ -270,8 +254,6 @@ def execute_free_deploy(
             verify_commands=verify_commands,
             save_after=save_after,
             stop_on_error=stop_on_error,
-            source_ip=source_ip,
-            socket_factory=socket_factory,
             timeout=timeout,
             read_timeout=read_timeout,
         )

@@ -34,10 +34,27 @@ def _parse_device_info(commands: dict) -> dict:
     }
 
     # --- display version ---
+    # 注意：eNSP 上 display version 既不打印型号也不带提示符
+    # （输出止于 Copyright 行），型号在 display device、主机名在 sysname。
     _try_extract(commands, "display version", lambda out: (
-        _update(info, "model", _regex_find(r"(AR\d+|S\d+|NE\d+|CE\d+|USG\d+|Router|Switch)\S*", out)),
         _update(info, "version", _regex_find(r"Version\s+([\d.]+\w*)", out)),
+        # 兜底：某些 VRP 版本会在 version 里带型号
+        _update(info, "model", _regex_find(r"(AR\d+|S\d+|NE\d+|CE\d+|USG\d+|Router|Switch)\S*", out)),
+        # 兜底：若输出恰好带上提示符 <Hostname>
         _update(info, "hostname", _regex_find(r"<(\S+)>", out)),
+    ))
+
+    # --- display current-configuration：sysname 才是主机名的可靠来源 ---
+    _try_extract(commands, "display current-configuration", lambda out: (
+        _update(info, "hostname", _regex_find(r"^\s*sysname\s+(\S+)", out, re.MULTILINE)),
+    ))
+
+    # --- display device：型号（Slot 表里的 Type 列，如 AR1220-S / S5700）---
+    # 注意：首行 "<主机名>'s Device status:" 是设备名不是型号，必须从 Slot 表取。
+    _try_extract(commands, "display device", lambda out: (
+        _update(info, "model", _regex_find(r"^\s*\d+\s+([A-Za-z]+\d[\w-]*)\s+(?:Present|Absent)", out, re.MULTILINE)),
+        _update(info, "device_slots",
+                _extract_table(out, r"^\d+\s+(\S+)\s+(Present|Absent)", 2)),
     ))
 
     # --- display ip interface brief ---
@@ -105,9 +122,9 @@ def _update(info: dict, key: str, value) -> None:
         info[key] = value
 
 
-def _regex_find(pattern: str, text: str) -> str:
+def _regex_find(pattern: str, text: str, flags: int = 0) -> str:
     """正则查找，返回第一个匹配组或空字符串。"""
-    m = re.search(pattern, text)
+    m = re.search(pattern, text, flags)
     return m.group(1) if m else ""
 
 

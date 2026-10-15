@@ -2,21 +2,13 @@
 配置下发：删除命令生成与配置推送。
 
 generate_delete_commands 纯函数生成 undo 命令；
-push_config_to_device 通过 SSH 推送命令并读取回显。
+push_config_to_device 通过本地 Console 推送命令并读取回显。
 """
 
 from typing import List
 
-from app.config import (
-    DEFAULT_DEVICE_TYPE,
-    DEFAULT_SSH_PASSWORD,
-    DEFAULT_SSH_USERNAME,
-    SSH_TIMEOUT,
-    logger,
-)
+from app.config import CONN_TIMEOUT, logger
 from app.state import state
-from domain.netprobe import _create_management_socket, _management_source_ip_for
-from domain.ssh_collect import _import_netmiko
 
 def generate_delete_commands(protocol: str, device: dict) -> List[str]:
     """生成删除协议配置的命令"""
@@ -49,26 +41,11 @@ def generate_delete_commands(protocol: str, device: dict) -> List[str]:
 def push_config_to_device(device: dict, commands: List[str]) -> dict:
     """推送配置到设备"""
     conn = None
-    ssh_sock = None
     try:
-        ConnectHandler, _, _ = _import_netmiko()
+        from services.device_connector import build_conn_params, import_console
 
-        conn_params = {
-            "device_type": device.get("device_type", DEFAULT_DEVICE_TYPE),
-            "host": device["ip"],
-            "username": device.get("username", DEFAULT_SSH_USERNAME),
-            "password": device.get("password", DEFAULT_SSH_PASSWORD),
-            "timeout": SSH_TIMEOUT,
-        }
-        source_ip = _management_source_ip_for(device["ip"])
-        if source_ip:
-            ssh_sock = _create_management_socket(device["ip"], 22, timeout=SSH_TIMEOUT)
-            conn_params["sock"] = ssh_sock
-
-        conn = ConnectHandler(
-            **conn_params,
-        )
-        ssh_sock = None
+        ConnectHandler, _, _ = import_console()
+        conn = ConnectHandler(**build_conn_params(device, timeout=CONN_TIMEOUT))
 
         # 进入系统视图并执行配置
         conn.send_command_timing("system-view")
@@ -101,9 +78,4 @@ def push_config_to_device(device: dict, commands: List[str]) -> dict:
             try:
                 conn.disconnect()
             except Exception:
-                pass
-        elif ssh_sock:
-            try:
-                ssh_sock.close()
-            except OSError:
                 pass

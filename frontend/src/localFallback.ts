@@ -84,8 +84,8 @@ function localDiagnose(last?: LastDeploy | null): string {
     lines.push("2. 先看\"能力识别\"里这项协议是否标记不支持；再看矩阵徽标的镜像家族。")
     lines.push("3. 改用\"协议角色\"页对应协议的填空模板，模板只发设备支持的命令。")
   } else if (err.includes("timeout") || err.includes("timed out")) {
-    lines.push("1. SSH 会话超时: 检查管理网段 IP/掩码、Windows 虚拟网卡、代理/TUN 是否劫持。")
-    lines.push("2. 设备侧验证: 用下方\"连通性验证\"ping 管理地址。")
+    lines.push("1. Console 会话超时: 确认设备已在 eNSP 中开机，且 Console 端口未被占用。")
+    lines.push("2. 设备侧验证: 用下方\"连通性验证\"ping 目标地址（需设备间二层/三层可达）。")
   } else if (err.includes("authentication") || err.includes("auth")) {
     lines.push("1. 认证失败: 核对 local-user 用户名/密码与设备列表里配置一致。")
     lines.push("2. 检查 aaa 与 user-interface vty 认证模式（aaa / password）。")

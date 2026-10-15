@@ -14,6 +14,7 @@ import type { SetTemplateParams } from "../components/FieldInput"
 import { useConfirm } from "../ui"
 import { collectParams, TemplateFields } from "../components/FieldInput"
 import { DeployResult } from "../components/DeployResult"
+import { CommandInput } from "../components/CommandInput"
 import { ConsolePanel } from "./config/ConsolePanel"
 import { CatalogPanel } from "./config/CatalogPanel"
 import { ClonePanel } from "./config/ClonePanel"
@@ -38,6 +39,7 @@ export function ConfigDeployView() {
 
   // 高级命令模式
   const [rawCommands, setRawCommands] = useState("")
+  const [rawInput, setRawInput] = useState("")
   const [rawSave, setRawSave] = useState(false)
   const [rawPreview, setRawPreview] = useState<string | null>(null)
   const [rawResult, setRawResult] = useState<DeployOutcome | null>(null)
@@ -151,6 +153,13 @@ export function ConfigDeployView() {
 
   // 高级命令模式
   const rawList = () => rawCommands.trim() ? rawCommands.split("\n").filter((c) => c.trim()) : []
+
+  const appendRawCommand = () => {
+    const cmd = rawInput.trim()
+    if (!cmd) return
+    setRawCommands((prev) => (prev ? prev.replace(/\s*$/, "\n") : "") + cmd + "\n")
+    setRawInput("")
+  }
 
   const previewRaw = async () => {
     if (!selectedIp) { notifications.show({ color: "red", message: "请先选择设备" }); return }
@@ -375,7 +384,15 @@ export function ConfigDeployView() {
           <Alert variant="light" color="red" mb="sm">
             警告：高级命令模式将直接下发原始命令到设备，可能导致配置异常。下发前系统将自动备份当前配置。
           </Alert>
+          <CommandInput
+            value={rawInput}
+            onChange={setRawInput}
+            ip={selectedIp || undefined}
+            placeholder="输入前缀显示候选，回车追加到下方命令"
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); appendRawCommand() } }}
+          />
           <Textarea
+            mt="xs"
             minRows={6} styles={{ input: { fontFamily: 'Consolas, "Courier New", monospace' } }}
             placeholder={"每行一条命令，例如：\nsystem-view\ninterface GigabitEthernet0/0/0\nip address 10.0.0.1 255.255.255.0\nreturn"}
             value={rawCommands}

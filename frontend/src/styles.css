@@ -70,6 +70,16 @@ html, body, #root { height: 100%; }
   font-size: 12.5px;
 }
 
+/* ---------- Agent 执行轨迹 ---------- */
+.agent-trace {
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  border-left: 2px solid var(--mantine-color-blue-4);
+  background: var(--mantine-color-blue-light);
+  border-radius: 4px;
+}
+.agent-trace > div { margin-bottom: 2px; }
+
 /* 能力/角色徽标用小号字 */
 .cap-name { font-size: 13px; }
 

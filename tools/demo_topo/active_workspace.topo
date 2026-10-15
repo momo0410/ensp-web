@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UNICODE" ?>
+<topo version="1.2.00.510">
+    <devices>
+        <dev id="B9B3685B-5900-4AD9-9961-78D5A000713E" name="R_TEST" poe="0" model="Router" settings="" system_mac="00-E0-FC-51-9E-11" com_port="2000" bootmode="0" cx="160.000000" cy="200.000000" edit_left="187" edit_top="254">
+            <slot number="slot17" isMainBoard="1">
+                <interface sztype="Ethernet" interfacename="Ethernet" count="2" />
+                <interface sztype="Ethernet" interfacename="GE" count="4" />
+                <interface sztype="Serial" interfacename="Serial" count="4" />
+            </slot>
+        </dev>
+    </devices>
+    <lines>
+    </lines>
+    <shapes />
+    <txttips />
+</topo>

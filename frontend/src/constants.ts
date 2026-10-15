@@ -24,7 +24,7 @@ export const CAPABILITY_NAMES = {
 
 export const DEVICE_TYPE_LABELS = {
   router: "路由器", l3_switch: "三层交换机", switch: "二层交换机",
-  firewall: "防火墙", ac: "无线AC", cloud: "云交换机", unknown: "未知",
+  firewall: "防火墙", ac: "无线AC", unknown: "未知",
 }
 
 export const TEMPLATE_CATEGORY_NAMES = {

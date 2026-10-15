@@ -6,7 +6,7 @@ command_probe.py - 设备 ? 探测引导（自动发现设备支持的命令）
 逐条标注该设备「是否支持此指令」。解决「如何知道设备支持什么」的问题。
 
 设计要点（延迟调到无感知）：
-- 双通道：SSH（netmiko）/ Console（零 IP，raw socket 连 127.0.0.1:port）。
+- 通道：本地 Console（raw socket 连 127.0.0.1:<console_port>）。
 - 单次探测：screen-length 0 temporary → display ? → system-view → ? →
   接口视图 ?，全部 `?` 单独成行（部分输入+回车会真执行命令，产生副作用）。
 - 通道健壮性：ANSI 转义清理（console 回显会被光标控制码吃掉首字符）、
@@ -34,8 +34,8 @@ PROBE_CACHE_TTL = 1800  # 30 分钟
 _probe_cache: Dict[str, Tuple[float, dict]] = {}
 
 # 连接超时（秒）—— 短超时保证无感知
-SSH_TIMEOUT = 6
-SSH_READ_TIMEOUT = 6
+CONN_TIMEOUT = 6
+CONN_READ_TIMEOUT = 6
 CONSOLE_TIMEOUT = 8
 CONSOLE_READ_TIMEOUT = 5
 
@@ -103,88 +103,58 @@ def _extract_model(version_output: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# SSH 通道探测
+# target 归一化
 # ---------------------------------------------------------------------------
-def probe_via_ssh(target: dict, timeout: int = SSH_TIMEOUT,
-                  read_timeout: int = SSH_READ_TIMEOUT
-                  ) -> Tuple[str, Dict[str, Set[str]]]:
-    """通过 SSH 连接设备，返回 (display version 输出, 各视图关键字集)。"""
-    from .device_connector import connect_device, safe_disconnect
+def _normalize_target(target: dict) -> dict:
+    """
+    统一 target 的键名。
 
-    device = {
-        "ip": target.get("ip"),
-        "username": target.get("username"),
-        "password": target.get("password"),
-        "device_type": target.get("device_type", "huawei"),
-    }
-    conn = None
-    version = ""
-    views: Dict[str, Set[str]] = {}
-    try:
-        conn = connect_device(device, timeout=timeout)
+    历史遗留问题：路由层与设备表用的是 console_port，而本模块按 port 读取，
+    int(None) 直接抛 TypeError，被上层 catch 成"连接失败"，表现为 ? 探测静默
+    返回 0 个关键字。这里双向补齐，两种写法都能用。
+    """
+    t = dict(target or {})
+    port = t.get("port") or t.get("console_port")
+    if port not in (None, "", 0):
         try:
-            version = conn.send_command("display version", read_timeout=read_timeout)
-        except Exception as e:
-            logger.warning("probe ssh display version 失败: %s", e)
-        try:
-            conn.send_command_timing("screen-length 0 temporary",
-                                     read_timeout=read_timeout)
-        except Exception:
-            pass
-
-        # display ? —— display 子命令全集
-        try:
-            views["display"] = parse_help_keywords(
-                strip_ansi(ask_help_timing(conn, "display ?", read_timeout)))
-        except Exception as e:
-            logger.warning("probe ssh display ? 失败: %s", e)
-
-        # 系统视图 ?
-        try:
-            conn.send_command_timing("system-view", read_timeout=read_timeout)
-            views["system"] = parse_help_keywords(
-                strip_ansi(ask_help_timing(conn, "?", read_timeout)))
-        except Exception as e:
-            logger.warning("probe ssh system-view ? 失败: %s", e)
-
-        # 接口视图 ?（进入真实存在的物理接口，无副作用）
-        if views.get("system"):
-            try:
-                brief = ask_help_timing(conn, "display interface brief", read_timeout)
-            except Exception:
-                brief = ""
-            interface_name = find_first_physical_interface(
-                brief, strip_ansi(brief))
-            if interface_name:
-                try:
-                    conn.send_command_timing(f"interface {interface_name}",
-                                             read_timeout=read_timeout)
-                    views["interface"] = parse_help_keywords(
-                        strip_ansi(ask_help_timing(conn, "?", read_timeout)))
-                except Exception as e:
-                    logger.warning("probe ssh interface ? 失败: %s", e)
-                try:
-                    conn.send_command_timing("quit", read_timeout=read_timeout)
-                except Exception:
-                    pass
-
-        try:
-            conn.send_command_timing("return", read_timeout=read_timeout)
-        except Exception:
-            pass
-    finally:
-        safe_disconnect(conn)
-    return version, views
+            port_i = int(port)
+        except (TypeError, ValueError):
+            port_i = 0
+        t["port"] = port_i
+        t["console_port"] = port_i
+        t.setdefault("mode", "console")
+    elif t.get("ip"):
+        t.setdefault("mode", "ssh")
+    return t
 
 
 # ---------------------------------------------------------------------------
-# Console 通道探测（零 IP，raw socket 连 127.0.0.1:port）
+# Console 通道探测（零 IP，连 127.0.0.1:port）
 # ---------------------------------------------------------------------------
+def open_console_session(port: int):
+    """
+    打开一个**已就绪**的 Console 会话。
+
+    必须复用 domain.console_connection.ConsoleConnection：它处理了 eNSP 控制台的
+    唤醒（\\x03）、用户名/密码认证、退回用户视图、关闭分屏与提示符识别。
+    裸 socket 直连会停在登录提示上，首条命令被吞，? 探测拿不到任何输出。
+    """
+    from domain.console_connection import ConsoleConnection
+
+    return ConsoleConnection(int(port), timeout=CONSOLE_TIMEOUT)
+
+
 def _console_connect(port: int, timeout: float = 2.0) -> socket.socket:
-    """连接 eNSP 本地 Console 端口并清掉登录提示。"""
+    """连接 eNSP 本地 Console 端口（保留供兼容调用）。"""
     sock = socket.create_connection(("127.0.0.1", port), timeout=timeout)
     sock.settimeout(timeout)
-    _console_recv_all(sock, max_wait=0.5)
+    # 唤醒：eNSP 控制台刚连上时需要一个空行才吐出稳定提示符
+    try:
+        sock.sendall(b"\x03\r")
+        time.sleep(0.2)
+        _console_recv_all(sock, max_wait=0.8)
+    except OSError:
+        pass
     return sock
 
 
@@ -207,8 +177,12 @@ def _console_recv_all(sock: socket.socket, wait: float = 0.25, max_wait: float =
 
 
 def _console_send(sock: socket.socket, command: str, read_timeout: float = 5.0) -> str:
-    """发送命令并读回输出；带回显校验，回显被 ANSI 码吃掉时自动重发一次。"""
-    sock.sendall((command + "\r\n").encode("ascii", errors="ignore"))
+    """发送命令并读回输出；带回显校验，回显被 ANSI 码吃掉时自动重发一次。
+
+    注意：VRP/eNSP 控制台只认裸 \\r。发 \\r\\n 会让首条命令被吞，
+    后续命令全部落到错误视图里返回 "Unrecognized command"。
+    """
+    sock.sendall((command + "\r").encode("ascii", errors="ignore"))
     time.sleep(0.2)
     out = _console_recv_all(sock, max_wait=read_timeout)
 
@@ -217,7 +191,7 @@ def _console_send(sock: socket.socket, command: str, read_timeout: float = 5.0) 
     cleaned = strip_ansi(out)
     if command not in cleaned.replace("\r", ""):
         time.sleep(0.3)
-        sock.sendall((command + "\r\n").encode("ascii", errors="ignore"))
+        sock.sendall((command + "\r").encode("ascii", errors="ignore"))
         time.sleep(0.2)
         out = _console_recv_all(sock, max_wait=read_timeout)
         cleaned = strip_ansi(out)
@@ -232,44 +206,93 @@ def _console_send(sock: socket.socket, command: str, read_timeout: float = 5.0) 
     return cleaned
 
 
+_VRP_PROMPT_RE = re.compile(r"^[<\[][^\s<>\[\]]+[>\]]\s*$")
+
+
+def read_until_prompt(conn, command: str, read_timeout: float = 6.0, rounds: int = 4) -> str:
+    """
+    发送命令并读到提示符出现为止。
+
+    eNSP 控制台的输出经常分成多段、间隔超过 `send_command` 内部 0.25s 的空闲
+    判定，导致长输出被截断——`display version` 实测只回来前三行（138 字符），
+    恰好丢掉带型号的那一行，于是设备类型永远判成 unknown。
+    这里用"没看到提示符就再读一段"的方式补齐。
+    """
+    out = conn.send_command_timing(command, read_timeout=read_timeout)
+    for _ in range(rounds):
+        lines = [ln for ln in (out or "").splitlines() if ln.strip()]
+        if lines and _VRP_PROMPT_RE.match(lines[-1].strip()):
+            break
+        more = conn.send_command_timing("", read_timeout=2.5)
+        if not more or more.strip() == (out or "").strip():
+            break
+        out = (out or "") + "\n" + more
+    return out or ""
+
+
+def _enter_system_view(conn, read_timeout: float, attempts: int = 3) -> bool:
+    """进入系统视图。
+
+    eNSP 控制台刚连上时首条命令偶发被吞（连 `system-view` 也会被吞），
+    表现为后续命令全落在用户视图、返回 Unrecognized command。
+    这里按提示符判断是否真的进了系统视图，没进就重试。
+    """
+    for _ in range(attempts):
+        out = conn.send_command_timing("system-view", read_timeout=read_timeout)
+        tail = [ln for ln in strip_ansi(out).splitlines() if ln.strip()]
+        if tail and tail[-1].strip().startswith("["):
+            return True
+        time.sleep(0.3)
+    return False
+
+
 def probe_via_console(target: dict, timeout: int = CONSOLE_TIMEOUT,
                       read_timeout: float = CONSOLE_READ_TIMEOUT
                       ) -> Tuple[str, Dict[str, Set[str]]]:
     """通过 eNSP 本地 Console 端口连接设备，返回 (version 输出, 各视图关键字集)。"""
-    port = int(target.get("port"))
-    sock = None
+    t = _normalize_target(target)
+    port = t.get("port")
+    if not port:
+        raise ValueError("target 缺少 console_port / port，无法走 Console 通道")
+
+    conn = open_console_session(port)
     version = ""
     views: Dict[str, Set[str]] = {}
     try:
-        sock = _console_connect(port)
-        _console_send(sock, "screen-length 0 temporary", read_timeout)
+        conn.send_command("screen-length 0 temporary", read_timeout=read_timeout)
 
-        out = _console_send(sock, "display ?", read_timeout)
-        views["display"] = parse_help_keywords(out)
+        out = conn.send_command("display ?", read_timeout=read_timeout)
+        views["display"] = parse_help_keywords(strip_ansi(out))
 
-        _console_send(sock, "system-view", read_timeout)
-        out = _console_send(sock, "?", read_timeout)
-        views["system"] = parse_help_keywords(out)
+        if _enter_system_view(conn, read_timeout):
+            out = conn.send_command("?", read_timeout=read_timeout)
+            views["system"] = parse_help_keywords(strip_ansi(out))
 
-        interface_name = (target.get("interface") or "").strip()
-        if not interface_name and views.get("system"):
-            brief = _console_send(sock, "display interface brief", read_timeout)
-            interface_name = find_first_physical_interface(brief)
-        if interface_name:
-            _console_send(sock, f"interface {interface_name}", read_timeout)
-            out = _console_send(sock, "?", read_timeout)
-            views["interface"] = parse_help_keywords(out)
-            _console_send(sock, "quit", read_timeout)
+            interface_name = (t.get("interface") or "").strip()
+            if not interface_name and views.get("system"):
+                brief = conn.send_command("display interface brief", read_timeout=read_timeout)
+                interface_name = find_first_physical_interface(brief)
+            if interface_name:
+                conn.send_command(f"interface {interface_name}", read_timeout=read_timeout)
+                out = conn.send_command("?", read_timeout=read_timeout)
+                views["interface"] = parse_help_keywords(strip_ansi(out))
+                conn.send_command("quit", read_timeout=read_timeout)
+            conn.send_command("return", read_timeout=read_timeout)
+        else:
+            logger.warning("端口 %s 未能进入系统视图，系统/接口视图关键字将缺失", port)
 
-        version = _console_send(sock, "display version", read_timeout)
-        _console_send(sock, "return", read_timeout)
-        _console_send(sock, "quit", read_timeout)
+        version = read_until_prompt(conn, "display version", read_timeout=read_timeout)
+        # display version 输出长，eNSP 上容易被分段截断而丢掉带型号的那一行；
+        # display device 输出短，作为型号来源的回退。
+        if not _extract_model(version):
+            device_out = read_until_prompt(conn, "display device", read_timeout=read_timeout)
+            if device_out:
+                version = version + "\n" + device_out
     finally:
-        if sock:
-            try:
-                sock.close()
-            except OSError:
-                pass
+        try:
+            conn.disconnect()
+        except Exception:
+            pass
     return version, views
 
 
@@ -293,6 +316,7 @@ def probe_device_commands(target: dict, force: bool = False) -> dict:
           "errors": [str], "from_cache": bool, "probed_at": float
         }
     """
+    target = _normalize_target(target)
     key = cache_key(target)
     cached = get_cached_probe(key)
     if cached and not force:
@@ -300,15 +324,11 @@ def probe_device_commands(target: dict, force: bool = False) -> dict:
         cached["from_cache"] = True
         return cached
 
-    mode = target.get("mode", "ssh")
     version = ""
     views: Dict[str, Set[str]] = {}
     errors: List[str] = []
     try:
-        if mode == "console":
-            version, views = probe_via_console(target)
-        else:
-            version, views = probe_via_ssh(target)
+        version, views = probe_via_console(target)
     except Exception as e:
         errors.append(f"连接设备失败: {e}")
         logger.warning("命令探测连接失败: %s", e)

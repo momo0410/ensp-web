@@ -28,7 +28,6 @@ logger = logging.getLogger("ensp-web.help_tree")
 # ---------------------------------------------------------------------------
 _HELP_TOKEN_RE = re.compile(r"^[A-Za-z][\w\-/]*$")
 
-
 def parse_help_keywords(text: str) -> Set[str]:
     """
     把 VRP `?` 帮助输出解析为关键字集合。
@@ -52,7 +51,6 @@ def parse_help_keywords(text: str) -> Set[str]:
             keywords.add(token.lower())
     return keywords
 
-
 def find_first_physical_interface(*sources: str) -> str:
     """从 display interface brief / 当前配置等文本中找第一个物理接口名。"""
     pattern = re.compile(
@@ -68,7 +66,6 @@ def find_first_physical_interface(*sources: str) -> str:
         if m:
             return m.group(1)
     return ""
-
 
 # ---------------------------------------------------------------------------
 # 协议签名：协议 key -> [(视图 scope, 关键字)]
@@ -116,7 +113,6 @@ PROTOCOL_SIGNATURES: Dict[str, List[Tuple[str, str]]] = {
     "vlanif":        [],
 }
 
-
 def detect_protocols(views: Dict[str, Set[str]]) -> Dict[str, str]:
     """
     用协议签名比对命令树，返回 {协议key: 证据描述}。
@@ -132,17 +128,16 @@ def detect_protocols(views: Dict[str, Set[str]]) -> Dict[str, str]:
                 break
     return detected
 
-
 # ---------------------------------------------------------------------------
-# 视图采集：SSH（基于已建立的 netmiko 连接）
+# 视图采集：基于已建立的设备连接
 # ---------------------------------------------------------------------------
-def collect_views_ssh(
+def collect_views_over_connection(
     connection: Any,
     read_timeout: int = 4,
     interface_name: str = "",
     deadline_s: float = 10.0,
 ) -> Tuple[Dict[str, Set[str]], List[str]]:
-    """在已建立的 SSH 连接上采集三层视图的关键字。
+    """在已建立的设备连接上采集三层视图的关键字。"
 
     Args:
         deadline_s: 整体时间预算（秒）。每一步之前检查，超预算立即带已有
@@ -209,52 +204,53 @@ def collect_views_ssh(
 
     return views, errors
 
-
 # ---------------------------------------------------------------------------
 # 视图采集：Console（raw socket，复用 command_probe 的底层收发）
 # ---------------------------------------------------------------------------
 def collect_views_console(target: dict, read_timeout: float = 4.0) -> Tuple[Dict[str, Set[str]], List[str]]:
     """通过 eNSP 本地 Console 端口采集视图关键字（零 IP 设备用）。"""
-    from .command_probe import _console_connect, _console_send
+    from .command_probe import _normalize_target, _enter_system_view, open_console_session
     from .device_connector import strip_ansi
 
-    port = int(target.get("port"))
+    t = _normalize_target(target)
+    port = t.get("port")
     views: Dict[str, Set[str]] = {}
     errors: List[str] = []
-    sock = None
+    if not port:
+        return views, ["console: target 缺少 console_port / port"]
+    conn = None
     try:
-        sock = _console_connect(port)
-        _console_send(sock, "screen-length 0 temporary", read_timeout)
+        conn = open_console_session(port)
+        conn.send_command("screen-length 0 temporary", read_timeout=read_timeout)
 
-        out = _console_send(sock, "display ?", read_timeout)
+        out = conn.send_command("display ?", read_timeout=read_timeout)
         views["display"] = parse_help_keywords(strip_ansi(out))
 
-        _console_send(sock, "system-view", read_timeout)
-        out = _console_send(sock, "?", read_timeout)
-        views["system"] = parse_help_keywords(strip_ansi(out))
+        if _enter_system_view(conn, read_timeout):
+            out = conn.send_command("?", read_timeout=read_timeout)
+            views["system"] = parse_help_keywords(strip_ansi(out))
 
-        interface_name = (target.get("interface") or "").strip()
-        if interface_name:
-            _console_send(sock, f"interface {interface_name}", read_timeout)
-            out = _console_send(sock, "?", read_timeout)
-            views["interface"] = parse_help_keywords(strip_ansi(out))
-            _console_send(sock, "quit", read_timeout)
-
-        _console_send(sock, "return", read_timeout)
-        _console_send(sock, "quit", read_timeout)
+            interface_name = (t.get("interface") or "").strip()
+            if interface_name:
+                conn.send_command(f"interface {interface_name}", read_timeout=read_timeout)
+                out = conn.send_command("?", read_timeout=read_timeout)
+                views["interface"] = parse_help_keywords(strip_ansi(out))
+                conn.send_command("quit", read_timeout=read_timeout)
+            conn.send_command("return", read_timeout=read_timeout)
+        else:
+            errors.append("console: 未能进入系统视图")
     except Exception as e:
         errors.append(f"console: {e}")
     finally:
-        if sock:
+        if conn:
             try:
-                sock.close()
-            except OSError:
+                conn.disconnect()
+            except Exception:
                 pass
     return views, errors
 
-
 # ---------------------------------------------------------------------------
-# 结果组装：版本 → 矩阵 → 签名比对 → 协议判定（SSH/Console 共用）
+# 结果组装：版本 → 矩阵 → 签名比对 → 协议判定（Console 通道）
 # ---------------------------------------------------------------------------
 def compose_discovery(version_output: str,
                       views: Dict[str, Set[str]],
@@ -296,14 +292,11 @@ def compose_discovery(version_output: str,
         "detected_count": len(detected),
     }
 
-
 # ---------------------------------------------------------------------------
-# 独立发现入口：自建 SSH 连接，一次拿到 版本 + 命令树 + 矩阵 + 协议判定
+# 独立发现入口：自建设备连接，一次拿到 版本 + 命令树 + 矩阵 + 协议判定
 # ---------------------------------------------------------------------------
-def discover_via_ssh(
+def discover_via_connection(
     device: dict,
-    source_ip: Optional[str] = None,
-    management_socket_factory=None,
     timeout: int = 10,
     read_timeout: int = 6,
 ) -> dict:
@@ -314,7 +307,7 @@ def discover_via_ssh(
     result: Dict[str, Any] = {
         "ip": ip,
         "hostname": device.get("name", ip),
-        "ssh_status": False,
+        "ok": False,
         "model": "",
         "image": "",
         "views": {},
@@ -326,17 +319,11 @@ def discover_via_ssh(
     }
 
     conn = None
-    ssh_sock = None
     try:
-        from .device_connector import import_netmiko, build_conn_params
-        ConnectHandler, _, _ = import_netmiko()
-        params = build_conn_params(device, timeout=timeout)
-        if source_ip and management_socket_factory:
-            ssh_sock = management_socket_factory(device["ip"], 22, timeout=timeout)
-            params["sock"] = ssh_sock
-        conn = ConnectHandler(**params)
-        ssh_sock = None
-        result["ssh_status"] = True
+        from .device_connector import import_console, build_conn_params
+        ConnectHandler, _, _ = import_console()
+        conn = ConnectHandler(**build_conn_params(device, timeout=timeout))
+        result["ok"] = True
 
         try:
             version = conn.send_command("display version", read_timeout=read_timeout)
@@ -355,7 +342,7 @@ def discover_via_ssh(
                 brief_output = ""
             interface_name = find_first_physical_interface(brief_output)
 
-        views, errors = collect_views_ssh(
+        views, errors = collect_views_over_connection(
             conn, read_timeout=read_timeout,
             interface_name=interface_name,
         )
@@ -368,9 +355,4 @@ def discover_via_ssh(
         logger.error("[%s] help_tree 发现失败: %s", ip, e)
     finally:
         safe_disconnect(conn)
-        if ssh_sock:
-            try:
-                ssh_sock.close()
-            except OSError:
-                pass
     return result

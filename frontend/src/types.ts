@@ -3,23 +3,37 @@
 export interface DeviceInfo {
   name: string
   ip: string
-  username?: string
-  password?: string
+  model?: string
   device_type?: string
   console_port?: number | null
+  auto_start?: boolean
+  cx?: number
+  cy?: number
+  uuid?: string
+  ip_address?: string
+  netmask?: string
+  gateway?: string
 }
 
-export interface InterfaceInfo {
+/** 连线的一个端点（对应后端 LinkEndpoint） */
+export interface LinkEndpoint {
+  device: string
+  interface: string
+}
+
+/** 一条拓扑连线 */
+export interface TopologyLink {
+  a: LinkEndpoint
+  b: LinkEndpoint
+}
+
+/** 拓扑库中的一个拓扑 */
+export interface TopologySummary {
   name: string
-  description?: string
-  ipv4?: string
-  netmask?: string
-  mac?: string
-  status: string
-  subnet?: string
-  is_recommended?: boolean
-  is_ensp?: boolean
-  recommendation_reason?: string
+  path: string
+  devices: number
+  links: number
+  modified: number
 }
 
 export interface CommandOutput {
@@ -33,8 +47,8 @@ export interface CollectionResult {
   ip?: string
   name?: string
   online?: boolean
-  ssh_ok?: boolean
-  ssh_error?: string
+  ok?: boolean
+  error?: string
   info?: {
     hostname?: string
     model?: string
@@ -74,7 +88,7 @@ export interface CapabilityResult {
   hostname?: string
   model?: string
   device_role?: string
-  ssh_status?: boolean
+  ok?: boolean
   capabilities?: Record<string, CapabilityItem>
   matrix?: MatrixInfo
   errors?: string[]
@@ -101,15 +115,6 @@ export interface RoleResult {
   hostname?: string
   device_role?: string
   protocols?: Record<string, RoleItem>
-}
-
-export interface TopologyLink {
-  source: string
-  source_ip?: string
-  local_interface?: string
-  target: string
-  target_ip?: string
-  remote_interface?: string
 }
 
 export interface TemplateFieldOption {
@@ -265,6 +270,28 @@ export interface ChatMessage {
   content: string
   done?: boolean
   error?: string
+  /** Agent 模式的执行轨迹（工具调用与结果），有则渲染为可折叠面板 */
+  trace?: AgentTraceItem[]
+}
+
+/** Agent 一步执行痕迹（工具调用 / 工具结果 / 错误）。 */
+export interface AgentTraceItem {
+  kind: "tool_call" | "tool_result" | "error" | "note"
+  step: number
+  tool?: string
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  args?: Record<string, any>
+  ok?: boolean
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  result?: any
+  text?: string
+}
+
+/** Agent 产出的待确认方案（尚未下发，需人工在确认闸门上点确认）。 */
+export interface AgentProposal {
+  plan_id: string | null
+  targets: string[]
+  summary?: Record<string, unknown>
 }
 
 export interface ProtocolTreeResult {
@@ -300,4 +327,18 @@ export interface BackupFile {
   filename: string
   size: number
   created: string
+}
+
+export interface CommandCandidate {
+  text: string
+  desc: string
+  source: "?" | "base" | "catalog"
+  view: string
+}
+
+export interface CommandCompleteResult {
+  success?: boolean
+  candidates: CommandCandidate[]
+  from_cache: boolean
+  hint?: string
 }

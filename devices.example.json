@@ -1,37 +1,30 @@
 [
   {
-    "name": "AR1",
-    "ip": "192.168.100.11",
-    "username": "admin",
-    "password": "Huawei@123",
+    "name": "R1",
+    "ip": "127.0.0.1:2000",
+    "model": "Router",
+    "console_port": 2000,
     "device_type": "huawei"
   },
   {
-    "name": "AR2",
-    "ip": "192.168.100.12",
-    "username": "admin",
-    "password": "Huawei@123",
+    "name": "FW1",
+    "ip": "127.0.0.1:2001",
+    "model": "USG5500",
+    "console_port": 2001,
     "device_type": "huawei"
   },
   {
-    "name": "AR3",
-    "ip": "192.168.100.13",
-    "username": "admin",
-    "password": "Huawei@123",
+    "name": "SW1",
+    "ip": "127.0.0.1:2002",
+    "model": "S5700",
+    "console_port": 2002,
     "device_type": "huawei"
   },
   {
-    "name": "AR4",
-    "ip": "192.168.100.14",
-    "username": "admin",
-    "password": "Huawei@123",
-    "device_type": "huawei"
-  },
-  {
-    "name": "LSW1",
-    "ip": "192.168.100.21",
-    "username": "admin",
-    "password": "Huawei@123",
+    "name": "SW2",
+    "ip": "127.0.0.1:2003",
+    "model": "S3700",
+    "console_port": 2003,
     "device_type": "huawei"
   }
 ]

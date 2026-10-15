@@ -270,14 +270,14 @@ class TestEvidenceMerge:
 
 
 # ---------------------------------------------------------------------------
-# 缓存路径集成：probe_capabilities_from_cache（纯 dict，零 SSH）
+# 缓存路径集成：probe_capabilities_from_cache（纯 dict，零连接）
 # ---------------------------------------------------------------------------
 class TestFromCacheIntegration:
     def _collection_result(self):
         return {
             "ip": "192.168.56.12",
             "name": "S5700",
-            "ssh_ok": True,
+            "ok": True,
             "commands": {
                 "display version": {"success": True, "output": S5700_VERSION},
                 "display current-configuration": {"success": True, "output": (
@@ -338,11 +338,9 @@ class TestCommandProbeViews:
             "interface": parse_help_keywords(INTERFACE_HELP),
         }
 
-        def fake_probe_via_ssh(target, timeout=6, read_timeout=6):
-            return S5700_VERSION, fake_views
-
-        monkeypatch.setattr(command_probe, "probe_via_ssh", fake_probe_via_ssh)
-        result = command_probe.probe_device_commands({"mode": "ssh", "ip": "1.2.3.4"}, force=True)
+        monkeypatch.setattr(command_probe, "probe_via_console",
+                            lambda target, *a, **kw: (S5700_VERSION, fake_views))
+        result = command_probe.probe_device_commands({"ip": "1.2.3.4", "console_port": 2000}, force=True)
 
         assert result["device_type"] == "l3_switch"
         assert result["keyword_count"] > 0
@@ -354,9 +352,9 @@ class TestCommandProbeViews:
         """抓不到 ? 输出（连接半残）时不做关键字否决，退化为按型号过滤。"""
         from services import command_probe
 
-        monkeypatch.setattr(command_probe, "probe_via_ssh",
-                            lambda target, timeout=6, read_timeout=6: ("", {}))
-        result = command_probe.probe_device_commands({"mode": "ssh", "ip": "1.2.3.4"}, force=True)
+        monkeypatch.setattr(command_probe, "probe_via_console",
+                            lambda target, *a, **kw: ("", {}))
+        result = command_probe.probe_device_commands({"ip": "1.2.3.4", "console_port": 2000}, force=True)
         assert result["keyword_count"] == 0
         assert "vrrp" in result["supported"]
 

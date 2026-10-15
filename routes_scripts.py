@@ -6,32 +6,42 @@ from typing import Any
 from typing import Dict
 from typing import List
 import concurrent.futures
-import ipaddress
-import psutil
-import socket
 
-from app.config import DEFAULT_DEVICE_TYPE, DEFAULT_SSH_PASSWORD, DEFAULT_SSH_USERNAME, logger
-from app.state import state
-from domain.device_store import load_devices, save_devices
-from domain.interfaces import _get_windows_adapter_metadata, _pick_best_ipv4, _rank_interface
-from domain.lldp import _sync_lldp_devices
-from domain.netprobe import (
-    _create_management_socket,
-    _management_source_ip_for,
-    ping_host,
-    probe_subnet,
-)
-from domain.ssh_collect import (
-    _default_discovered_name,
-    ssh_collect_device_parallel,
-    ssh_identify_device,
-)
+from app.config import logger
+from app.state import record_collection, state
+from domain.device_store import load_devices
+from domain.reachability import ping_host
+from domain.collect import collect_device
 from services.capability_probe import probe_capabilities_parallel
 from services.script_service import delete_script, get_script, save_script
 from services import state_persist
 from services.task_history_service import get_task, list_tasks
 
 router = APIRouter()
+
+# 能力识别结果的有效期。eNSP 镜像的支持集合不会变，真正会变的是
+# configured/running 两态；启动时复用较新的缓存能省掉一次全量探测
+# （15 台实测 ~100s，期间前台请求被拖到十几秒）。
+_PROBE_CACHE_TTL_SECONDS = 30 * 60
+
+
+def _is_probe_fresh(cap: Any, now: float = None) -> bool:
+    """判断一条缓存的能力识别结果是否还新到可以复用。"""
+    if not isinstance(cap, dict) or not cap.get("ok"):
+        return False
+    raw = cap.get("raw_outputs") or {}
+    if not any(isinstance(v, str) and v.strip() for v in raw.values()):
+        return False
+    import time as _time
+    ts = cap.get("probed_at") or cap.get("generated_at")
+    if not ts:
+        return False
+    try:
+        age = (now or _time.time()) - float(ts)
+    except (TypeError, ValueError):
+        return False
+    return 0 <= age <= _PROBE_CACHE_TTL_SECONDS
+
 
 class ScriptSaveRequest(BaseModel):
     script_name: str
@@ -97,158 +107,93 @@ init_state = {
     "initialized": False,
     "in_progress": False,
     "message": "",
-    "selected_interface": None,
-    "subnet": None,
 }
 
 
 def _auto_init():
-    """服务器启动时自动执行：选择网卡 → 发现设备 → 并行采集 → 并行能力识别"""
+    """服务器启动时自动执行：就绪检查 → 并行采集已配置设备 → 能力识别。
+
+    设备来源是 devices.json（由添加设备 / 导入拓扑预设写入），
+    不再扫描网段。
+    """
     global init_state
     if init_state["initialized"] or init_state["in_progress"]:
         return
 
     init_state["in_progress"] = True
-    init_state["message"] = "正在自动识别网卡..."
+    init_state["message"] = "正在检查已配置设备..."
 
     try:
-        # 1. 自动选择管理网卡
-        interfaces = _get_all_interfaces()
-        recommended = None
-        for iface in interfaces:
-            if iface.get("is_recommended"):
-                recommended = iface
-                break
-
-        if not recommended:
-            for iface in interfaces:
-                if iface.get("ipv4") and iface.get("status") == "UP":
-                    recommended = iface
-                    break
-
-        if not recommended:
-            init_state["message"] = "未找到可用的管理网卡"
+        devices = load_devices()
+        if not devices:
             init_state["initialized"] = True
-            init_state["in_progress"] = False
+            init_state["message"] = "尚未添加设备，请先添加设备或导入拓扑预设"
             return
 
-        state["selected_interface"] = {
-            "name": recommended["name"],
-            "ip": recommended["ipv4"],
-            "netmask": recommended["netmask"],
-        }
-        try:
-            network = ipaddress.IPv4Network(f"{recommended['ipv4']}/{recommended['netmask']}", strict=False)
-            state["subnet"] = str(network)
-        except ValueError:
-            state["subnet"] = None
+        # 1. 并行采集
+        init_state["message"] = f"正在采集 {len(devices)} 台设备信息..."
 
-        init_state["selected_interface"] = state["selected_interface"]
-        init_state["subnet"] = state["subnet"]
-        init_state["message"] = f"已选择网卡: {recommended['name']} ({recommended['ipv4']})"
+        def _collect_one(device):
+            ip = device["ip"]
+            if ping_host(ip):
+                return collect_device(device, fast_mode=True)
+            return {"ip": ip, "name": device.get("name", ip), "online": False,
+                    "ok": False, "error": "Console 端口不可达", "commands": {}, "info": {}}
 
-        # 2. 发现设备
-        if state["subnet"]:
-            init_state["message"] = f"正在扫描网段 {state['subnet']}..."
-            local_ip = state["selected_interface"]["ip"]
-            probes = probe_subnet(state["subnet"], exclude_ip=local_ip, max_workers=50)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(devices), 10)) as executor:
+            future_map = {executor.submit(_collect_one, d): d for d in devices}
+            for future in concurrent.futures.as_completed(future_map):
+                try:
+                    result = future.result()
+                    record_collection(result["ip"], result)
+                except Exception as e:
+                    device = future_map[future]
+                    logger.error("采集 %s 失败: %s", device["ip"], e)
 
-            # SSH 识别设备
-            discovered = []
-            for probe in probes:
-                device = {
-                    "name": _default_discovered_name(probe["ip"]),
-                    "ip": probe["ip"],
-                    "username": DEFAULT_SSH_USERNAME,
-                    "password": DEFAULT_SSH_PASSWORD,
-                    "device_type": DEFAULT_DEVICE_TYPE,
-                }
-                identity = ssh_identify_device(device)
-                if identity.get("ssh_ok"):
-                    device["name"] = identity.get("name", device["name"])
-                    discovered.append(device)
+        # 2. 并行能力识别（传入采集缓存，命中时零连接）
+        init_state["message"] = "正在并行识别设备能力..."
 
-            if discovered:
-                save_devices(discovered)
-                logger.info("自动发现 %d 台设备", len(discovered))
+        def _probe_one(device):
+            ip = device["ip"]
+            coll_result = state["collection_results"].get(ip)
+            try:
+                return probe_capabilities_parallel(device, collection_result=coll_result)
+            except Exception as e:
+                logger.error("能力识别 %s 失败: %s", ip, e)
+                return {"ip": ip, "device_name": device.get("name", ip),
+                        "ok": False, "capabilities": {}, "errors": [str(e)]}
 
-                # 3. 并行批量采集（3个SSH会话/台，设备间也并行）
-                init_state["message"] = f"正在并行采集 {len(discovered)} 台设备信息..."
+        # 缓存里已有的设备不必重新探测：启动时它们已经有角色数据，
+        # 重探一遍只是把首次启动拖长（实测 15 台全探要 ~100s，期间请求被拖到 17s）。
+        cached_caps = state_persist.load_capability_cache()
+        fresh_targets = [d for d in devices
+                         if d.get("ip") and not _is_probe_fresh(cached_caps.get(d["ip"]))]
+        reused = len(devices) - len(fresh_targets)
+        state["capability_results"] = dict(cached_caps)
+        if reused:
+            logger.info("复用 %d 台设备的能力识别缓存，实际探测 %d 台", reused, len(fresh_targets))
 
-                def _parallel_collect(device):
-                    ip = device["ip"]
-                    online = ping_host(ip)
-                    if online:
-                        return ssh_collect_device_parallel(device, fast_mode=True)
-                    return {"ip": ip, "name": device.get("name", ip), "online": False,
-                            "ssh_ok": False, "ssh_error": "设备不可达", "commands": {}, "info": {}}
-
-                with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(discovered), 10)) as executor:
-                    future_map = {executor.submit(_parallel_collect, d): d for d in discovered}
-                    for future in concurrent.futures.as_completed(future_map):
-                        try:
-                            result = future.result()
-                            state["collection_results"][result["ip"]] = result
-                        except Exception as e:
-                            device = future_map[future]
-                            logger.error("采集 %s 失败: %s", device["ip"], e)
-
-                # 4. LLDP 同步 + 并行采集新发现设备
-                lldp_added = _sync_lldp_devices()
-                if lldp_added:
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(lldp_added), 5)) as executor:
-                        future_map = {executor.submit(_parallel_collect, d): d for d in lldp_added}
-                        for future in concurrent.futures.as_completed(future_map):
-                            try:
-                                result = future.result()
-                                state["collection_results"][result["ip"]] = result
-                            except Exception as e:
-                                device = future_map[future]
-                                logger.error("LLDP 采集 %s 失败: %s", device["ip"], e)
-
-                # 5. 并行能力识别（3个SSH会话/台，设备间也并行）
-                init_state["message"] = "正在并行识别设备能力..."
-                all_devices = load_devices()
-
-                def _parallel_probe(device):
-                    ip = device["ip"]
-                    src = _management_source_ip_for(ip)
-                    # 传入采集缓存，避免重复 SSH
-                    coll_result = state["collection_results"].get(ip)
+        if fresh_targets:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(fresh_targets), 10)) as executor:
+                future_map = {executor.submit(_probe_one, d): d for d in fresh_targets}
+                for future in concurrent.futures.as_completed(future_map):
                     try:
-                        return probe_capabilities_parallel(
-                            device,
-                            source_ip=src,
-                            management_socket_factory=_create_management_socket,
-                            collection_result=coll_result,
-                        )
+                        cap_result = future.result()
+                        state["capability_results"][cap_result["ip"]] = cap_result
                     except Exception as e:
-                        logger.error("能力识别 %s 失败: %s", ip, e)
-                        return {"ip": ip, "device_name": device.get("name", ip),
-                                "ssh_status": False, "capabilities": {}, "errors": [str(e)]}
+                        device = future_map[future]
+                        logger.error("能力识别 %s 失败: %s", device["ip"], e)
 
-                state["capability_results"] = {}
-                with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(all_devices), 10)) as executor:
-                    future_map = {executor.submit(_parallel_probe, d): d for d in all_devices}
-                    for future in concurrent.futures.as_completed(future_map):
-                        try:
-                            cap_result = future.result()
-                            state["capability_results"][cap_result["ip"]] = cap_result
-                            state_persist.save_capability_cache(
-                                state["capability_results"])
-                        except Exception as e:
-                            device = future_map[future]
-                            logger.error("能力识别 %s 失败: %s", device["ip"], e)
+            # 全部探测完再落盘一次：早先每完成一台就写一遍全量 JSON，
+            # 15 台就是 15 次全量写入，把事件循环堵得更久。
+            try:
+                state_persist.save_capability_cache(state["capability_results"])
+            except Exception as e:
+                logger.warning("能力缓存落盘失败: %s", e)
 
-                init_state["initialized"] = True
-                init_state["message"] = f"初始化完成: {len(discovered)} 台设备"
-                logger.info("自动初始化完成")
-            else:
-                init_state["initialized"] = True
-                init_state["message"] = "未发现可管理的设备"
-        else:
-            init_state["initialized"] = True
-            init_state["message"] = "未获取到网段信息"
+        init_state["initialized"] = True
+        init_state["message"] = f"初始化完成: {len(devices)} 台设备"
+        logger.info("自动初始化完成")
 
     except Exception as e:
         init_state["initialized"] = True
@@ -256,69 +201,5 @@ def _auto_init():
         logger.error("自动初始化失败: %s", e)
     finally:
         init_state["in_progress"] = False
-
-
-def _get_all_interfaces() -> List[dict]:
-    """获取所有网卡信息"""
-    interfaces = []
-    try:
-        addrs = psutil.net_if_addrs()
-        stats = psutil.net_if_stats()
-        metadata = _get_windows_adapter_metadata()
-    except Exception:
-        return interfaces
-
-    for name, addr_list in addrs.items():
-        meta = metadata.get(name, {})
-        info = {
-            "name": name,
-            "description": meta.get("description", ""),
-            "ipv4": "",
-            "netmask": "",
-            "mac": "",
-            "status": "DOWN",
-            "is_ensp": False,
-            "is_recommended": False,
-        }
-
-        ipv4_candidates = []
-        for addr in addr_list:
-            try:
-                if addr.family == socket.AF_INET:
-                    candidate = {
-                        "address": addr.address or "",
-                        "netmask": addr.netmask or "",
-                    }
-                    if candidate["address"]:
-                        ipv4_candidates.append(candidate)
-                elif addr.family == getattr(psutil, "AF_LINK", -1):
-                    info["mac"] = addr.address or ""
-            except Exception:
-                pass
-
-        best_ipv4 = _pick_best_ipv4(ipv4_candidates)
-        if best_ipv4:
-            info["ipv4"] = best_ipv4["address"]
-            info["netmask"] = best_ipv4["netmask"]
-
-        try:
-            if name in stats:
-                info["status"] = "UP" if stats[name].isup else "DOWN"
-        except Exception:
-            pass
-
-        if info["ipv4"] or info["mac"]:
-            score, _ = _rank_interface(info)
-            info["is_ensp"] = score >= 40
-            info["is_recommended"] = score >= 40
-            interfaces.append(info)
-
-    interfaces.sort(key=lambda x: (
-        not x.get("is_recommended", False),
-        not x.get("is_ensp", False),
-        x.get("status") != "UP",
-    ))
-
-    return interfaces
 
 

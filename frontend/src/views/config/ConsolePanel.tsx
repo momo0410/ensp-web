@@ -32,7 +32,7 @@ export function ConsolePanel() {
     const cmds = cmdList()
     if (!cmds.length) { notifications.show({ color: "red", message: "请填写配置命令" }); return }
     const ok = await confirm("确认通过 Console 下发配置",
-      "即将通过 Console 端口下发命令，该通道不会自动备份配置（无 SSH 会话）。是否确认继续？")
+      "即将通过 Console 端口下发命令，该通道不会自动备份配置。是否确认继续？")
     if (!ok) return
     setDeploying(true)
     try {

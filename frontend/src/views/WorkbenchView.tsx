@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react"
 import {
-  Button, Checkbox, Group, Paper, Stack, Text, TextInput, Textarea, Title, Badge,
+  Alert, Button, Checkbox, Group, Paper, Stack, Text, TextInput, Textarea, Title, Badge,
 } from "@mantine/core"
 import { notifications } from "@mantine/notifications"
 import {
@@ -8,12 +8,13 @@ import {
 } from "@tabler/icons-react"
 import { NETWORK_VAR_NAMES, WILDCARD_VAR_NAMES } from "../constants"
 import { useApp } from "../store"
-import { extractVariables, rowsToJson, rebuildRows, parseVarJson } from "../lib/workbench"
+import { rowsToJson, rebuildRows } from "../lib/workbench"
 import type { VarRow } from "../lib/workbench"
 import type { WorkbenchDeployResult, WorkbenchDeviceResult, WorkbenchPreviewResult } from "../types"
 import { api } from "../api"
 import { BatchStatusBanner, EmptyHint, MonoPre, useConfirm } from "../ui"
 import { networkToWildcardJS } from "../netutil"
+import { CommandInput } from "../components/CommandInput"
 
 export function WorkbenchView() {
   const { devices, workbenchBus, setLastDeploy, pendingAppend, setPendingAppend } = useApp()
@@ -22,6 +23,7 @@ export function WorkbenchView() {
   const [taskName, setTaskName] = useState("")
   const [selectedDevices, setSelectedDevices] = useState<string[]>([])
   const [commands, setCommands] = useState("")
+  const [commandInput, setCommandInput] = useState("")
   const [verifyText, setVerifyText] = useState("")
   const [stopOnError, setStopOnError] = useState(true)
   const [saveAfter, setSaveAfter] = useState(false)
@@ -30,6 +32,12 @@ export function WorkbenchView() {
   const [rows, setRows] = useState<VarRow[]>([])
   const [jsonGlobal, setJsonGlobal] = useState("{}")
   const [jsonDevice, setJsonDevice] = useState("{}")
+
+  // 序列模式（需求⑧）：同一模板按序号展开成逐台变量
+  const [seriesRows, setSeriesRows] = useState<{ name: string; template: string; override: string }[]>([])
+  const [seriesStart, setSeriesStart] = useState("1")
+  const [seriesStep, setSeriesStep] = useState("1")
+  const [seriesWidth, setSeriesWidth] = useState("0")
 
   const [previewData, setPreviewData] = useState<WorkbenchPreviewResult | null>(null) // free-preview 响应
   const [resultData, setResultData] = useState<WorkbenchDeployResult | null>(null)   // free-deploy / 任务详情响应
@@ -70,6 +78,13 @@ export function WorkbenchView() {
       setRows((prev) => rebuildRows(value, prev))
       await loadSmartDefaults()
     }, 600)
+  }
+
+  const appendCommandLine = () => {
+    const cmd = commandInput.trim()
+    if (!cmd) return
+    onCommandsInput((commands ? commands.replace(/\s*$/, "\n") : "") + cmd + "\n")
+    setCommandInput("")
   }
 
   const loadSmartDefaults = async () => {
@@ -133,29 +148,45 @@ export function WorkbenchView() {
 
   const addRow = () => setRows((prev) => [...prev, { name: "", global: "", devices: {} }])
 
+  const addSeriesRow = () =>
+    setSeriesRows((prev) => [...prev, { name: "", template: "", override: "" }])
+
+  const updateSeriesRow = (index: number, patch: Partial<{ name: string; template: string; override: string }>) =>
+    setSeriesRows((prev) => prev.map((r, i) => (i === index ? { ...r, ...patch } : r)))
+
+  const deleteSeriesRow = (index: number) =>
+    setSeriesRows((prev) => prev.filter((_, i) => i !== index))
+
   const switchMode = () => {
     if (varMode === "table") {
       const { globalVars, deviceVars } = rowsToJson(rows)
       setJsonGlobal(JSON.stringify(globalVars, null, 2))
       setJsonDevice(JSON.stringify(deviceVars, null, 2))
       setVarMode("json")
+    } else if (varMode === "json") {
+      // 进序列模式：用模板里已出现的 {{var}} 预填行，减少手工输入
+      const names = (commands.match(/\{\{\s*\w+\s*\}\}/g) || [])
+        .map((m) => m.replace(/[{}\s]/g, ""))
+        .filter((v, i, arr) => arr.indexOf(v) === i)
+      setSeriesRows((prev) => {
+        const existing = new Map(prev.map((r) => [r.name, r]))
+        return names.map((name) => existing.get(name) || { name, template: "", override: "" })
+      })
+      setVarMode("series")
     } else {
-      let globalVars = {}
-      const parsed = parseVarJson(jsonGlobal, jsonDevice, commands)
-      if (parsed) setRows(parsed)
       setVarMode("table")
     }
   }
 
   const buildData = () => {
-    const errors = []
-    let globalVars = {}
-    let deviceVars = {}
+    const errors: string[] = []
+    let globalVars: Record<string, string> = {}
+    let deviceVars: Record<string, Record<string, string>> = {}
     if (varMode === "table") {
       const r = rowsToJson(rows)
       globalVars = r.globalVars
       deviceVars = r.deviceVars
-    } else {
+    } else if (varMode === "json") {
       try { if (jsonGlobal.trim() && jsonGlobal.trim() !== "{}") globalVars = JSON.parse(jsonGlobal) } catch (e) {
         errors.push(`全局变量 JSON 解析失败: ${(e as Error).message}`)
       }
@@ -163,6 +194,43 @@ export function WorkbenchView() {
         errors.push(`单设备变量 JSON 解析失败: ${(e as Error).message}`)
       }
     }
+    // varMode === "series" 时变量完全由序列展开，device_vars 仅作手填覆盖
+
+    // 序列模式：校验 base 是否填了变量，避免给后端一个空 series
+    let series = null
+    if (varMode === "series") {
+      const base: Record<string, string> = {}
+      for (const row of seriesRows) {
+        const name = row.name.trim()
+        if (name && row.template.trim()) base[name] = row.template.trim()
+      }
+      if (!Object.keys(base).length) {
+        errors.push("序列模式至少要为 1 个变量填写模板（如 192.168.1.{i}）")
+      } else {
+        const start = Number(seriesStart) || 1
+        const step = Number(seriesStep) || 1
+        const width = Number(seriesWidth) || 0
+        const overrides: Record<string, Record<string, string>> = {}
+        for (const row of seriesRows) {
+          const name = row.name.trim()
+          if (!name || !row.override.trim()) continue
+          try {
+            const parsed = JSON.parse(row.override)
+            if (parsed && typeof parsed === "object") {
+              for (const [ip, vals] of Object.entries(parsed)) {
+                if (vals && typeof vals === "object") {
+                  overrides[ip] = { ...(overrides[ip] || {}), ...(vals as Record<string, string>) }
+                }
+              }
+            }
+          } catch {
+            errors.push(`变量 ${name} 的「个别覆盖」不是合法 JSON（应为 {"127.0.0.1:2001":{"${name}":"9.9.9.9"}}）`)
+          }
+        }
+        series = { base, start, step, width, per_device_overrides: overrides }
+      }
+    }
+
     return {
       task_name: taskName.trim(),
       target_devices: selectedDevices,
@@ -172,6 +240,7 @@ export function WorkbenchView() {
       verify_commands: verifyText.trim() ? verifyText.split("\n").map((s) => s.trim()).filter(Boolean) : [],
       save_after_success: saveAfter,
       stop_on_error: stopOnError,
+      series,
       errors,
     }
   }
@@ -192,6 +261,7 @@ export function WorkbenchView() {
           global_vars: data.global_vars,
           device_vars: data.device_vars,
           verify_commands: data.verify_commands,
+          ...(data.series ? { series: data.series } : {}),
         }),
       })
       if (!result.success) {
@@ -229,6 +299,7 @@ export function WorkbenchView() {
           verify_commands: data.verify_commands,
           save_after_success: data.save_after_success,
           stop_on_error: data.stop_on_error,
+          ...(data.series ? { series: data.series } : {}),
         }),
       })
       setResultData(result)
@@ -392,7 +463,14 @@ export function WorkbenchView() {
             命令模板
             <Text component="span" size="xs" c="dimmed" ml={6}>支持 {"{{变量名}}"} 语法，# 开头为注释，空行自动跳过</Text>
           </Text>
-          <Textarea minRows={10} styles={{ input: { fontFamily: 'Consolas, "Courier New", monospace' } }}
+          <CommandInput
+            value={commandInput}
+            onChange={setCommandInput}
+            ip={selectedDevices[0]}
+            placeholder="输入前缀显示候选，回车追加到下方模板"
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); appendCommandLine() } }}
+          />
+          <Textarea mt="xs" minRows={10} styles={{ input: { fontFamily: 'Consolas, "Courier New", monospace' } }}
             placeholder={"interface {{interface}}\nip address {{ip_address}} {{subnet_mask}}\nquit\n\n# 开启 LLDP\nlldp enable"}
             value={commands}
             onChange={(e) => onCommandsInput(e.currentTarget.value)} />
@@ -401,16 +479,106 @@ export function WorkbenchView() {
         <div>
           <Group gap="xs" mb={4}>
             <Text size="sm" fw={500}>变量配置</Text>
-            <Button size="xs" variant="default" onClick={addRow}>+ 添加变量</Button>
+            {varMode !== "series" && <Button size="xs" variant="default" onClick={addRow}>+ 添加变量</Button>}
+            {varMode === "series" && <Button size="xs" variant="default" onClick={addSeriesRow}>+ 添加序列变量</Button>}
             <Button size="xs" variant="default" onClick={switchMode}>
-              {varMode === "table" ? "切换到 JSON 模式" : "切换到表格模式"}
+              {varMode === "table" ? "切换到 JSON 模式" : varMode === "json" ? "切换到序列模式" : "切换到表格模式"}
             </Button>
             <Text size="xs" c="dimmed">
-              {varMode === "table" ? "表格模式 — 模板变量自动提取" : "JSON 模式 — 手动编辑全局和单设备变量"}
+              {varMode === "table"
+                ? "表格模式 — 模板变量自动提取"
+                : varMode === "json"
+                  ? "JSON 模式 — 手动编辑全局和单设备变量"
+                  : "序列模式 — 同一模板按序号展开，5 台设备不必手填 5 行"}
             </Text>
           </Group>
 
-          {varMode === "table" ? (
+          {varMode === "series" ? (
+            <Stack gap="xs">
+              <Group gap="xs" wrap="wrap">
+                <TextInput size="xs" w={110} label="起始序号" value={seriesStart}
+                  onChange={(e) => setSeriesStart(e.currentTarget.value)} />
+                <TextInput size="xs" w={110} label="步长" value={seriesStep}
+                  onChange={(e) => setSeriesStep(e.currentTarget.value)} />
+                <TextInput size="xs" w={110} label="补零宽度" value={seriesWidth}
+                  onChange={(e) => setSeriesWidth(e.currentTarget.value)} />
+              </Group>
+              <Text size="xs" c="dimmed">
+                模板可用占位符：{"{i}"}（序号）、{"{i:02d}"}（补零）、{"{ip_last}"}（设备 IP 末段）、{"{ip}"}（设备 IP）。
+                不写占位符的值视为固定值。序号按下方选中的设备顺序依次分配。
+              </Text>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ borderCollapse: "collapse", minWidth: 560 }}>
+                  <thead>
+                    <tr>
+                      <th style={{ textAlign: "left", padding: "6px 8px", minWidth: 130 }}>变量名</th>
+                      <th style={{ textAlign: "left", padding: "6px 8px", minWidth: 200 }}>模板（如 192.168.1.{"{i}"}）</th>
+                      <th style={{ textAlign: "left", padding: "6px 8px" }}>个别设备覆盖（JSON，可选）</th>
+                      <th style={{ width: 44 }}></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {seriesRows.length === 0 && (
+                      <tr>
+                        <td colSpan={4} style={{ textAlign: "center", padding: 14 }}>
+                          <Text size="xs" c="dimmed">在命令模板里用了 {"{{变量名}}"} 时会自动出现在这里</Text>
+                        </td>
+                      </tr>
+                    )}
+                    {seriesRows.map((row, index) => (
+                      <tr key={index}>
+                        <td style={{ padding: "3px 4px" }}>
+                          <TextInput size="xs" placeholder="router_id" value={row.name}
+                            onChange={(e) => updateSeriesRow(index, { name: e.currentTarget.value })} />
+                        </td>
+                        <td style={{ padding: "3px 4px" }}>
+                          <TextInput size="xs" placeholder="192.168.1.{i}" value={row.template}
+                            onChange={(e) => updateSeriesRow(index, { template: e.currentTarget.value })} />
+                        </td>
+                        <td style={{ padding: "3px 4px" }}>
+                          <TextInput size="xs" placeholder='{"127.0.0.1:2001":{"router_id":"9.9.9.9"}}'
+                            value={row.override}
+                            onChange={(e) => updateSeriesRow(index, { override: e.currentTarget.value })} />
+                        </td>
+                        <td style={{ padding: "3px 4px" }}>
+                          <Button size="compact-xs" variant="light" color="red"
+                            onClick={() => deleteSeriesRow(index)}><IconX size={12} /></Button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {selectedDevices.length > 0 && seriesRows.some((r) => r.name.trim() && r.template.trim()) && (
+                <Alert color="blue" variant="light" p="xs">
+                  <Text size="xs" fw={500} mb={4}>展开预览（{selectedDevices.length} 台）</Text>
+                  {selectedDevices.map((ip, i) => {
+                    const info = devices.find((d) => d.ip === ip) || { name: ip }
+                    const start = Number(seriesStart) || 1
+                    const step = Number(seriesStep) || 1
+                    const idx = start + i * step
+                    const width = Number(seriesWidth) || 0
+                    const parts = seriesRows
+                      .filter((r) => r.name.trim() && r.template.trim())
+                      .map((r) => {
+                        const lastOctet = (ip.split(":").pop() || "").split(".").pop() || ""
+                        const rendered = r.template
+                          .replace(/\{i:0\d+d\}/g, String(idx).padStart(parseInt(r.template.match(/\{i:(0\d+)d\}/)?.[1] || "2", 10)))
+                          .replace(/\{i\}/g, width > 0 ? String(idx).padStart(width, "0") : String(idx))
+                          .replace(/\{ip_last\}/g, lastOctet)
+                          .replace(/\{ip\}/g, ip)
+                        return `${r.name.trim()}=${rendered}`
+                      })
+                    return (
+                      <Text key={ip} size="xs" c="dimmed">
+                        {info.name}（第 {idx} 个）：{parts.join("，")}
+                      </Text>
+                    )
+                  })}
+                </Alert>
+              )}
+            </Stack>
+          ) : varMode === "table" ? (
             <div style={{ overflowX: "auto" }}>
               <table style={{ borderCollapse: "collapse", minWidth: 480 }}>
                 <thead>

@@ -193,5 +193,78 @@ return
 """
 
 
+class TestOpenAIChatCompletionsEndpoint:
+    def test_v1_chat_completions_non_stream(self, monkeypatch):
+        from fastapi.testclient import TestClient
+        import main
+
+        monkeypatch.setattr(
+            ai_assistant,
+            "chat_once",
+            lambda messages, cfg=None, max_tokens=2048: f"Echo({len(messages)}): {messages[-1]['content']}",
+        )
+        client = TestClient(main.app)
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "glm-4-flash",
+                "messages": [{"role": "user", "content": "请配置 OSPF Area 0"}],
+                "stream": False,
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["object"] == "chat.completion"
+        assert data["model"] == "glm-4-flash"
+        assert data["choices"][0]["message"]["role"] == "assistant"
+        assert "请配置 OSPF Area 0" in data["choices"][0]["message"]["content"]
+        assert data["choices"][0]["finish_reason"] == "stop"
+
+    def test_v1_chat_completions_stream(self, monkeypatch):
+        from fastapi.testclient import TestClient
+        import main
+
+        def fake_stream(messages, cfg=None, max_tokens=2048):
+            yield "system-view\n"
+            yield "ospf 1"
+
+        monkeypatch.setattr(ai_assistant, "chat_stream", fake_stream)
+        client = TestClient(main.app)
+        resp = client.post(
+            "/api/v1/chat/completions",
+            json={
+                "model": "deepseek-chat",
+                "messages": [{"role": "user", "content": "ospf"}],
+                "stream": True,
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.text
+        assert '"object": "chat.completion.chunk"' in body
+        assert "system-view" in body
+        assert "data: [DONE]" in body
+
+    def test_add_device_auto_assigns_console_and_syncs_topo(self, monkeypatch, tmp_path):
+        from fastapi.testclient import TestClient
+        import main
+        import routes_devices
+
+        store = []
+        monkeypatch.setattr(routes_devices, "load_devices", lambda: list(store))
+        monkeypatch.setattr(routes_devices, "save_devices", lambda devs: (store.clear(), store.extend(devs)))
+
+        client = TestClient(main.app)
+        resp = client.post(
+            "/api/devices",
+            json={"name": "R_TEST", "model": "Router", "auto_start": True},
+        )
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert payload["success"] is True
+        assert payload["device"]["console_port"] == 2000
+        assert payload["device"]["ip"] == "127.0.0.1:2000"
+        assert payload["ensp"]["ok"] is True
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

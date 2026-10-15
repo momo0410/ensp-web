@@ -60,12 +60,10 @@ return
 def test_fast_collection_uses_portable_full_current_configuration():
     unsupported = "display current-configuration | section ^interface"
 
+    assert "display current-configuration" in main.HUAWEI_COMMANDS
     assert "display current-configuration" in main.HUAWEI_COMMANDS_FAST
-    assert "display current-configuration" in main.PARALLEL_CMD_GROUP_B
-    assert "display current-configuration" in main.PARALLEL_CMD_GROUP_B_FAST
+    assert all(unsupported not in command for command in main.HUAWEI_COMMANDS)
     assert all(unsupported not in command for command in main.HUAWEI_COMMANDS_FAST)
-    assert all(unsupported not in command for command in main.PARALLEL_CMD_GROUP_B)
-    assert all(unsupported not in command for command in main.PARALLEL_CMD_GROUP_B_FAST)
 
 
 def test_device_cli_rejection_is_not_reported_as_success():
@@ -89,10 +87,11 @@ def test_backup_rejects_cli_error_instead_of_saving_it(monkeypatch, tmp_path):
 
     monkeypatch.setattr(
         backup_service,
-        "import_netmiko",
+        "import_console",
         lambda: (lambda **params: FakeConnection(), Exception, Exception),
     )
-    monkeypatch.setattr(backup_service, "BACKUP_DIR", tmp_path)
+    # 备份目录现在由 ensure_backup_dir() 按当前拓扑解析，打桩该函数即可
+    monkeypatch.setattr(backup_service, "ensure_backup_dir", lambda: tmp_path)
 
     result = backup_service.backup_device_config({"ip": "192.0.2.10", "name": "R1"})
 
@@ -143,7 +142,7 @@ def test_parse_device_info_uses_full_configuration_result():
 def test_protocol_collection_refreshes_stale_invalid_cache(monkeypatch):
     ip = "192.0.2.1"
     stale = {
-        "ssh_ok": True,
+        "ok": True,
         "commands": {
             "display current-configuration | section ^ospf": {
                 "success": False,
@@ -196,4 +195,4 @@ def test_protocol_collection_falls_back_to_labeled_backup(monkeypatch):
     assert result["config_source"] == "backup"
     assert result["config_backup_file"] == "R2_latest.cfg"
     assert result["config_warnings"] == ["实时获取失败: timed out"]
-    assert result["ssh_ok"] is False
+    assert result["ok"] is False
