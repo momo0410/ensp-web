@@ -45,6 +45,7 @@ from routes_system import router as system_router
 from routes_devices import router as devices_router
 from routes_capabilities import router as capabilities_router
 from routes_ai import router as ai_router
+from routes_agent import router as agent_router
 from routes_config import router as config_router
 from routes_scripts import router as scripts_router
 
@@ -52,6 +53,7 @@ app.include_router(system_router)
 app.include_router(devices_router)
 app.include_router(capabilities_router)
 app.include_router(ai_router)
+app.include_router(agent_router)
 app.include_router(config_router)
 app.include_router(scripts_router)
 
@@ -105,6 +107,15 @@ async def startup_event():
     thread2 = threading.Thread(target=_silent_collect_missing, daemon=True)
     thread2.start()
 
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """退出时清理 Agent sidecar 子进程，避免留下孤儿 Node 进程。"""
+    try:
+        from services.agent_sidecar import sidecar
+        sidecar.stop()
+    except Exception as e:
+        logger.warning("清理 Agent sidecar 失败: %s", e)
 
 
 def _silent_collect_missing() -> None:

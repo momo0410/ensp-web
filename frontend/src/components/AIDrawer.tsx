@@ -1,17 +1,19 @@
 import React, { useEffect, useRef, useState } from "react"
 import {
-  Badge, Button, Drawer, Group, Loader, PasswordInput, Progress, Select, Stack, Tabs, Text, Textarea, TextInput,
+  Badge, Button, Drawer, Group, Loader, PasswordInput, Progress, Select, Stack, Switch, Tabs, Text, Textarea, TextInput, Tooltip,
 } from "@mantine/core"
 import { IconSend } from "@tabler/icons-react"
 import { AI_QUICK_TASKS } from "../constants"
 import { useApp } from "../store"
-import { api, streamSSE } from "../api"
+import { api, streamAgent, streamSSE } from "../api"
 import { localFallback } from "../localFallback"
 import { AiMarkdown } from "../AiMarkdown"
-import type { ChatMessage, DevicePingResult, LabExperiment, LabProgress, AIStatus } from "../types"
+import { AgentTrace } from "./AgentTrace"
+import type { AgentTraceItem, ChatMessage, DevicePingResult, LabExperiment, LabProgress, AIStatus } from "../types"
 
 const HISTORY_KEY = "ai_history"
 const LAB_KEY = "ai_lab_session"
+const AGENT_KEY = "ai_agent_mode"
 
 export function AIDrawer() {
   const {
@@ -26,6 +28,14 @@ export function AIDrawer() {
   const [input, setInput] = useState("")
   const [streaming, setStreaming] = useState(false)
   const aiHistoryRef = useRef<Array<{ role: string; content: string }>>([])
+
+  // Agent 模式：让 AI 自己调工具查证，而不是只凭上下文作答
+  const [agentMode, setAgentMode] = useState(() => {
+    try { return localStorage.getItem(AGENT_KEY) === "1" } catch { return false }
+  })
+  useEffect(() => {
+    try { localStorage.setItem(AGENT_KEY, agentMode ? "1" : "0") } catch { /* ignore */ }
+  }, [agentMode])
 
   // 实验指导
   const [experiments, setExperiments] = useState<LabExperiment[]>([])
@@ -111,6 +121,65 @@ export function AIDrawer() {
       saveHistory()
     } catch (e) {
       setMessages((prev) => prev.map((m) => (m.id === botId ? { ...m, error: (e as Error).message, done: true } : m)))
+    } finally {
+      setStreaming(false)
+    }
+  }
+
+  // ---------- Agent 模式：让 AI 自己调工具查证 ----------
+  const sendAgentChatRef = useRef<((messageText?: string) => Promise<void>) | null>(null)
+  sendAgentChatRef.current = async (messageText?: string) => {
+    if (streaming) return
+    const message = (messageText !== undefined ? messageText : input).trim()
+    if (!message) return
+    if (messageText === undefined) setInput("")
+
+    const userId = `u${Date.now()}`
+    const botId = `b${Date.now()}`
+    setMessages((prev) => [...prev,
+      { id: userId, role: "user", content: message, done: true },
+      { id: botId, role: "assistant", content: "…", done: false, trace: [] },
+    ])
+    aiHistoryRef.current.push({ role: "user", content: message })
+    setStreaming(true)
+
+    const pushTrace = (item: AgentTraceItem) => {
+      setMessages((prev) => prev.map((m) => (m.id === botId
+        ? { ...m, trace: [...(m.trace || []), item] }
+        : m)))
+    }
+
+    try {
+      let answer = ""
+      await streamAgent("/api/agent/chat", {
+        message,
+        device_ip: deviceIp || null,
+        history: aiHistoryRef.current.slice(0, -1),
+        protocol: "auto",
+      }, (ev) => {
+        if (ev.type === "tool_call") {
+          pushTrace({ kind: "tool_call", step: ev.step || 0, tool: ev.tool, args: ev.args })
+        } else if (ev.type === "tool_result") {
+          pushTrace({ kind: "tool_result", step: ev.step || 0, tool: ev.tool, ok: ev.ok, result: ev.result })
+        } else if (ev.type === "error") {
+          pushTrace({ kind: "error", step: ev.step || 0, text: ev.error })
+        } else if (ev.type === "answer") {
+          answer = ev.answer || ""
+          setMessages((prev) => prev.map((m) => (m.id === botId ? { ...m, content: answer } : m)))
+        } else if (ev.type === "done") {
+          setMessages((prev) => prev.map((m) => (m.id === botId ? { ...m, done: true } : m)))
+        }
+      })
+      // 兜底：即便模型没给 answer 事件，也要让气泡定稿，避免一直显示"…"
+      setMessages((prev) => prev.map((m) => (m.id === botId
+        ? { ...m, content: answer || "（Agent 未给出文字结论）", done: true }
+        : m)))
+      if (answer) aiHistoryRef.current.push({ role: "assistant", content: answer })
+      saveHistory()
+    } catch (e) {
+      setMessages((prev) => prev.map((m) => (m.id === botId
+        ? { ...m, error: (e as Error).message, done: true }
+        : m)))
     } finally {
       setStreaming(false)
     }
@@ -387,6 +456,13 @@ export function AIDrawer() {
             <Button size="compact-xs" variant="default" onClick={clearHistory}>清空</Button>
           </Group>
 
+          <Tooltip
+            multiline w={300} withArrow position="bottom-start"
+            label="开启后 AI 不再只凭上下文作答，而是可以自己调用工具（读设备实测、检索命令目录、ping 验证、追踪路径）查证后再回答，过程全程可见。AI 依然无法直接下发配置，只能产出待确认方案。">
+            <Switch size="xs" mb="xs" checked={agentMode} onChange={(e) => setAgentMode(e.currentTarget.checked)}
+              label={agentMode ? "Agent 模式（会自己查证，过程可见）" : "对话模式（直接作答）"} />
+          </Tooltip>
+
           <div ref={chatBoxRef} className="ai-msgs" style={{ flex: 1, minHeight: 0, padding: "4px 2px" }}>
             {!messages.length && (
               <div className="ai-msg assistant">
@@ -399,26 +475,37 @@ export function AIDrawer() {
               <div key={m.id || m.content} className={`ai-msg ${m.role}`}>
                 {m.error
                   ? <span><Badge color="red" variant="light" size="sm">出错</Badge> {m.error}<br /><small>若是未配置，请点"设置"填入 API 地址、Key 与模型名。</small></span>
-                  : m.role === "assistant" && m.done
-                    ? <AiMarkdown text={m.content} onTemplate={(key) => templateJumpRef.current?.(key)} />
-                    : m.content}
+                  : <>
+                      {m.role === "assistant" && m.trace && m.trace.length > 0 && (
+                        <AgentTrace items={m.trace} />
+                      )}
+                      {m.role === "assistant" && m.done
+                        ? <AiMarkdown text={m.content} onTemplate={(key) => templateJumpRef.current?.(key)} />
+                        : m.content}
+                    </>}
               </div>
             ))}
           </div>
 
           <Group align="flex-end" mt="xs" gap="xs" wrap="nowrap">
             <Textarea flex={1} minRows={2} maxRows={5} autosize
-              placeholder="问点什么…（Enter 发送，Shift+Enter 换行）"
+              placeholder={agentMode
+                ? "问点什么…（Agent 会自己调工具查证）"
+                : "问点什么…（Enter 发送，Shift+Enter 换行）"}
               value={input}
               onChange={(e) => setInput(e.currentTarget.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault()
-                  sendAIChatRef.current?.()
+                  if (agentMode) sendAgentChatRef.current?.()
+                  else sendAIChatRef.current?.()
                 }
               }} />
-            <Button disabled={streaming} onClick={() => sendAIChatRef.current?.()}
-              leftSection={<IconSend size={14} />}>发送</Button>
+            <Button disabled={streaming}
+              onClick={() => agentMode ? sendAgentChatRef.current?.() : sendAIChatRef.current?.()}
+              leftSection={streaming ? <Loader size={14} /> : <IconSend size={14} />}>
+              {agentMode ? "执行" : "发送"}
+            </Button>
           </Group>
         </Tabs.Panel>
 
