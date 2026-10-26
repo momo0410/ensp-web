@@ -87,10 +87,42 @@ def release_single_instance_lock() -> None:
 
 
 def _read_owner() -> str:
+    """读出占用者描述；若记录的 pid 已不存在，标注为残留记录。
+
+    锁本身由 filelock 的 OS 级锁保证，进程被强杀后会自动释放；
+    但 `.instance.owner` 是普通文本文件，会留在磁盘上。启动时若恰好
+    撞上另一进程正在抢锁的窗口，读到的可能是上一轮异常退出的残留，
+    这时候如果照原样报"已有一个实例在运行（pid=13372）"，用户会去追一个
+    根本不存在的进程。这里做一次存活校验，把话说清。
+    """
     try:
-        return OWNER_FILE.read_text(encoding="utf-8").strip()
+        raw = OWNER_FILE.read_text(encoding="utf-8").strip()
     except OSError:
         return "另一进程（占用者信息不可读）"
+    pid = _parse_pid(raw)
+    if pid is not None and not _pid_alive(pid):
+        return f"{raw}（该 pid 已退出，属上次异常退出的残留记录）"
+    return raw
+
+
+def _parse_pid(text: str):
+    """从 `pid=123  started=...` 里取出 pid；取不到返回 None。"""
+    import re
+
+    match = re.search(r"pid=(\d+)", text)
+    return int(match.group(1)) if match else None
+
+
+def _pid_alive(pid: int) -> bool:
+    """pid 是否仍然存在。优先用 psutil（已是依赖），缺失时保守认为存活。"""
+    try:
+        import psutil
+    except ImportError:
+        return True
+    try:
+        return psutil.pid_exists(pid)
+    except Exception:
+        return True
 
 
 def fail_fast_if_already_running() -> None:

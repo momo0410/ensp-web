@@ -54,3 +54,41 @@ def test_lock_released_allows_reacquire(monkeypatch, tmp_path):
     # 再次获取应当成功
     instance_lock.acquire_single_instance_lock()
     instance_lock.release_single_instance_lock()
+
+
+def test_残留的占用者记录会被标注为已退出(monkeypatch, tmp_path):
+    """`.instance.owner` 是普通文件，进程被强杀后会留下。
+
+    报错信息里若原样给出一个不存在的 pid，用户会去追一个幽灵进程；
+    `_read_owner` 必须点明这是残留记录。
+    """
+    from app import instance_lock
+
+    owner = tmp_path / ".instance.owner"
+    owner.write_text("pid=999999  started=2026-10-17 08:16:20", encoding="utf-8")
+    monkeypatch.setattr(instance_lock, "OWNER_FILE", owner)
+
+    text = instance_lock._read_owner()
+    assert "pid=999999" in text
+    assert "已退出" in text and "残留" in text
+
+
+def test_存活的占用者记录原样返回(monkeypatch, tmp_path):
+    import os
+
+    from app import instance_lock
+
+    owner = tmp_path / ".instance.owner"
+    owner.write_text(f"pid={os.getpid()}  started=2026-10-17 08:16:20", encoding="utf-8")
+    monkeypatch.setattr(instance_lock, "OWNER_FILE", owner)
+
+    text = instance_lock._read_owner()
+    assert "已退出" not in text
+    assert f"pid={os.getpid()}" in text
+
+
+def test_占用者文件读不出来时给兜底文案(monkeypatch, tmp_path):
+    from app import instance_lock
+
+    monkeypatch.setattr(instance_lock, "OWNER_FILE", tmp_path / "不存在.owner")
+    assert "不可读" in instance_lock._read_owner()
