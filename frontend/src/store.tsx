@@ -296,8 +296,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const data: any = await api("/api/collect-all", { method: "POST" })
       if (data.devices) setDevices(data.devices)
-      setCollectionResults((prev) => ({ ...prev, ...(data.results || {}) }))
-      const results: CollectionResult[] = Object.values(data.results || {})
+      // 后端 /api/collect-all 返回的是**数组**，必须按 ip 建索引后再合并。
+      // 直接展开数组会得到 {0:…,1:…} 这类下标键，collectionResults[ip] 永远查不到，
+      // 表格里的运行/采集状态就会停在挂载时的旧值（横幅却因为走 Object.values 而是对的）。
+      const byIp: Record<string, CollectionResult> = {}
+      for (const r of (data.results || []) as CollectionResult[]) {
+        if (r?.ip) byIp[r.ip] = r
+      }
+      setCollectionResults((prev) => ({ ...prev, ...byIp }))
+      const results: CollectionResult[] = Object.values(byIp)
       const okCount = results.filter((r) => r.ok).length
       if (!automatic) {
         showStatus("success", `批量采集完成: ${okCount}/${results.length} 台成功`)
