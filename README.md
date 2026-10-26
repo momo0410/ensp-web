@@ -96,6 +96,31 @@ AI 实验指导面板内置该工具，结果可一键交给助教分析。
 - **实验指导**：预置 8 个实验（静态路由/OSPF/VLAN Trunk/DHCP/VRRP/NAT/ACL/GRE），
   进度校验基于能力识别缓存（零连接），助教按进度给引导提示，不直接给整段答案。
 
+### AI Agent 架构（工具调用）
+
+AI 助教是"一次性问答"，Agent 则是能**多步调用工具**的循环。两者的模型接入配置共用
+`ai_config.json`。
+
+- **引擎在 Node，工具在 Python**：Agent 循环跑在 Node sidecar
+  （`agent_node/server.mjs`），依赖 `@earendil-works/pi-agent-core`；由 Python 后端
+  按需拉起，**只监听 `127.0.0.1`** 的随机空闲端口，随主进程退出而关闭。
+- **工具定义只有一处**：sidecar 启动时从 Python 拉取工具 schema
+  （`GET /api/agent/internal/tools`），每次调用再回调 Python 执行
+  （`POST /api/agent/internal/tools/execute`）。Node 侧**不硬编码任何工具**，
+  所以"Agent 能做什么"只在 `services/agent_tools.py` 一处定义。
+- **现有 13 个工具**（只读观测 11 个 + 待确认方案 2 个）：
+  `list_devices`、`get_device_detail`、`get_current_config`、`get_ensp_status`、
+  `list_topologies`、`search_commands`、`ping`、`trace_path`、`complete_command`、
+  `collect_device`、`probe_capabilities`、`propose_config`、`propose_topology`。
+- **单轮最多 8 步**（`MAX_STEPS`，防止失控循环）；内部端点用进程启动时随机生成的
+  共享密钥校验 `X-Agent-Token`，密钥只存内存与子进程环境，不落盘、不入日志。
+- **缺依赖不静默降级**：机器上没装 Node 或 `agent_node` 依赖未安装时，
+  `POST /api/agent/chat` 直接返回 **503** 并给出可读原因；`GET /api/agent/status`
+  可查 sidecar 就绪状态（node / 入口 / 依赖三项）。
+- **安全红线**：工具集里**没有任何"直接下发"工具**——最重的动作是 `propose_config` /
+  `propose_topology`，只产出待确认方案，实际下发仍要在界面上走
+  「备份 → 预览 → 人工确认 → 验证」，确认闸门不可省略。
+
 ---
 
 ## 功能列表
@@ -126,7 +151,7 @@ AI 实验指导面板内置该工具，结果可一键交给助教分析。
 17. 设备侧 ping 连通性验证
 
 ### 安全与运维
-18. 下发历史记录（task_history），AI 配置与访问令牌均不入 git
+18. 下发历史记录（task_history），AI 配置与密钥均不入 git
 19. 用户设置面板（顶栏「设置」）：控制项目与 eNSP 的联动开关，见下方「项目设置」
 
 ---
@@ -153,6 +178,11 @@ AI 实验指导面板内置该工具，结果可一键交给助教分析。
 **本版本没有访问令牌机制**：`services/access_guard.py` 已删除，`main.py` 不挂载令牌
 中间件，所有 `/api/*` 直接可用，无需 `X-Access-Token` 头。
 
+CORS 已从通配（`allow_origins=["*"]`）**收窄为回环来源白名单**，只放行本机
+`127.0.0.1` / `localhost` 的 8000（后端/桌面窗口）与 8160（前端 dev 代理）四个来源。
+这是**纵深防御，不等于鉴权**：它只阻止其他网页跨源调用本服务，挡不住本机任何进程
+直接 `curl` 这些接口。当前版本确实没有令牌机制，请勿把"已收窄 CORS"当成访问控制。
+
 因此启动时请绑定回环地址，不要暴露到局域网：
 
 ```cmd
@@ -161,7 +191,8 @@ uvicorn main:app --host 127.0.0.1 --port 8000
 
 真正的安全边界在**下发链路**：任何配置变更都必须走
 「自动备份 → 预览 → 人工确认 → 下发后验证」，AI 只能产出受 schema 约束的 JSON plan
-（`POST /api/ai/plan`），校验通过后仍要人点确认，不会自动执行。
+（`POST /api/ai/plan`），校验通过后仍要人点确认，不会自动执行。Agent 侧同理——
+工具集里没有任何直接下发工具（见「AI Agent 架构」）。
 
 ---
 
@@ -217,7 +248,7 @@ python main.py --web
 
 > `pywebview` 未安装时会提示；此时只能用 `--web` 模式，或 `pip install pywebview`。
 
-首次访问会弹出访问令牌输入框，粘贴服务启动日志中打印的令牌即可。
+当前版本无需任何令牌或登录，打开即可用（安全边界见上方「访问安全」）。
 
 ---
 
@@ -240,7 +271,7 @@ python main.py --web
 | POST | `/api/ensp/topo/apply` | 一键应用拓扑（`preset=comprehensive_campus` 加载内置案例）并自动开机 |
 | POST | `/api/ensp/start-all` | 同步当前设备到 eNSP 并全部开机 |
 | POST | `/api/ensp/stop-all` | 停止 eNSP 中全部设备 |
-| GET | `/api/health` | 健康检查（免令牌） |
+| GET | `/api/health` | 健康检查 |
 
 ### 拓扑库与连线
 
@@ -343,6 +374,21 @@ python main.py --web
 后端校验设备是否存在、型号是否支持、接口是否被重复占用等；校验失败会返回可读原因。
 通过校验也**只是拿到一份建议**，实际下发仍要走「备份 → 预览 → 人工确认 → 验证」。
 
+### AI Agent（工具调用循环）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/agent/tools` | 工具清单（能力透明展示，含 kind=read/prepare） |
+| GET | `/api/agent/status` | sidecar 与依赖健康状况（node / 入口 / 依赖） |
+| POST | `/api/agent/chat` | 跑一轮 Agent，SSE 透传事件；缺 Node/依赖返回 **503** |
+| POST | `/api/agent/chat/sync` | 同上，非流式（脚本与测试用） |
+| GET | `/api/agent/internal/tools` | 仅供 sidecar 回调，需 `X-Agent-Token` |
+| POST | `/api/agent/internal/tools/execute` | 仅供 sidecar 回调执行一次工具，需 `X-Agent-Token` |
+
+`internal` 两条是 Node sidecar 与 Python 之间的内部 RPC，密钥在 sidecar 启动时随机生成、
+只存内存与子进程环境；工具集与执行**只在 Python 定义**，因此"Agent 没有下发工具"
+这件事是一处定义、全局成立。
+
 ---
 
 ## 内置案例
@@ -385,7 +431,9 @@ ensp-web/
 ├── app/                         # 应用层（无领域依赖的基础设施）
 │   ├── config.py                # 日志、路径常量、eNSP/华为设备默认参数、版本号
 │   ├── state.py                 # 共享可变状态（state / init_state / _lab_sessions）
-│   └── models.py                # Pydantic 请求模型
+│   ├── models.py                # Pydantic 请求模型
+│   ├── desktop.py               # 桌面窗口启动器（系统 WebView2；--web 走浏览器模式）
+│   └── instance_lock.py         # 单实例保护（.instance.lock / .instance.owner）
 ├── domain/                      # 领域层（网络设备操作的纯逻辑）
 │   ├── device_store.py          # 设备列表持久化（filelock）
 │   ├── ensp_runtime.py          # .topo 生成/加载、eNSP 注入、全部/单台启停控制
@@ -397,10 +445,21 @@ ensp-web/
 │   ├── parse.py                 # display 输出解析、配置段提取
 │   ├── workspace.py             # 工作目录与拓扑库（一个拓扑一个子目录）
 │   └── config_push.py           # 删除命令生成与配置推送
-├── routes_*.py                  # HTTP 路由（薄层：system / devices / capabilities / ai / config / scripts）
+├── routes_*.py                  # HTTP 路由（薄层：system / devices / capabilities / ai / agent / config / scripts）
+├── routes_agent.py              # Agent 的 HTTP 层（/api/agent/*，含 sidecar 内部 RPC）
+├── agent_node/                  # Agent 引擎（Node sidecar，由 Python 后端按需拉起）
+│   ├── server.mjs               # Agent 循环（pi-agent-core），只监听 127.0.0.1
+│   ├── tool-bridge.mjs          # 工具 schema 拉取与调用回调 Python
+│   ├── provider.mjs             # 模型服务适配（OpenAI 兼容）
+│   ├── package.json             # 依赖：@earendil-works/pi-agent-core / pi-ai
+│   └── node_modules/            # （npm install 生成，已 gitignore）
+├── docs/                        # 评估与规划文档
+│   ├── 功能规划与可行性评估.md
+│   ├── 功能实施方案.md
+│   └── 真机能力摸底报告.md
 ├── frontend/                    # React 19 + Mantine 9 + TypeScript 前端（Vite 构建）
 │   ├── index.html
-│   ├── vite.config.ts           # base=./；dev 模式代理 /api → 127.0.0.1:8000
+│   ├── vite.config.ts           # base=./；dev 模式代理 /api → 127.0.0.1:8160
 │   ├── tsconfig.json            # 严格模式；references 指向 tsconfig.node.json
 │   ├── src/
 │   │   ├── App.tsx              # 应用外壳：导航 / 主题 / 皮肤
@@ -414,19 +473,25 @@ ensp-web/
 │   ├── node_modules/            # （npm install 生成，已 gitignore）
 │   └── dist/                    # （npm run build 产物，已 gitignore）
 ├── services/                    # 服务模块
+│   ├── agent_sidecar.py         # Agent sidecar（Node / pi）生命周期与内部 RPC
+│   ├── agent_tools.py           # Agent 工具注册表（「Agent 能做什么」的唯一出处）
 │   ├── ai_assistant.py          # AI 助教（接入/上下文/实验指导）
+│   ├── ai_deploy_service.py     # AI 一键刷配置（生成 → 预览 → 确认 → 刷入 → 检测）
 │   ├── ai_plan.py                # AI 结构化 plan（schema 校验，AI 只建议不执行）
-│   ├── app_settings.py          # 用户设置项定义（开关面板的数据源）
+│   ├── app_settings.py          # 用户设置项的集中定义与读写（开关面板的数据源）
 │   ├── backup_service.py        # 配置备份
+│   ├── batch_variables.py       # 批量变量序列展开（`series` → 逐台变量）
 │   ├── capability_matrix.py     # eNSP 镜像 → 协议能力矩阵
 │   ├── capability_probe.py      # 能力探测（矩阵/?树/多候选整合）
 │   ├── command_catalog.py       # 命令目录（字段/模板/trigger）
+│   ├── command_complete.py      # 命令上下文补全（实测/基础/目录三层候选）
 │   ├── command_probe.py         # ? 探测引导（本地 Console）
 │   ├── config_builder.py        # 声明式模板渲染引擎 + CONFIG_TEMPLATES
 │   ├── config_clone_service.py  # 配置复制与自动冲突适配
 │   ├── conflict_detector.py     # 跨设备冲突检测
 │   ├── deploy_service.py        # 配置下发
 │   ├── device_connector.py      # Console 连接工厂 + ANSI 清理
+│   ├── elevation.py             # 进程自提权（UAC）
 │   ├── free_config_executor.py  # 自由配置执行
 │   ├── free_config_renderer.py  # 自由配置渲染/危险命令检查
 │   ├── help_tree.py             # 递归 ? 视图采集与协议签名
@@ -457,6 +522,8 @@ ensp-web/
     └── app.js                   # 旧版 JavaScript
 ```
 
+> `static/` **已冻结**：不再新增功能，仅修致命问题，计划在学期末移除。
+
 **分层约定**：`app/`（基础设施）← `domain/`（领域逻辑）← `routes_*.py`（HTTP 薄层）。
 `services/` 为内聚的服务模块，被 domain/routes 显式导入。所有模块间依赖均为显式 import，
 不使用通配符导入。
@@ -483,9 +550,19 @@ ensp-web/
 python -m pytest
 ```
 
-单元测试覆盖：能力矩阵、? 树解析、ANSI 清理、协议角色、填空预填、
+当前 **407 个离线单测全部通过**（约 55 秒），分布在 `tests/` 下 28 个 `test_*.py`。
+覆盖范围：能力矩阵、? 树解析、ANSI 清理、协议角色、填空预填、
 AI 上下文与实验校验、状态持久化（含实验会话重启恢复）、
-设备侧 ping 解析、Console 端口分配与拓扑同步等（全部离线运行，不接触任何真机）。
+设备侧 ping 解析、Console 端口分配与拓扑同步、批量变量序列、配置复制与冲突检测等。
+全部离线运行，不接触任何真机、不启动 Node 进程。
+
+Agent 相关覆盖（`tests/test_agent_tools.py` 27 项 + `tests/test_agent_sidecar.py` 27 项）：
+工具注册表结构、13 个工具的参数 schema、内部端点 `X-Agent-Token` 校验、
+sidecar 就绪判定与降级路径，以及**"工具集里不存在任何直接下发工具"这条安全边界**——
+它由单测断言，改坏会立刻红灯。
+
+`tests/test_app_wiring.py` 8 项锁住 `main.py` 的装配约定：`app.version` 取自
+`APP_VERSION`、shutdown 处理器只有一个且先停 sidecar 再释放锁、CORS 不放行通配来源。
 
 配置见 `pytest.ini`：`testpaths = tests`，仅收集 `test_*.py`。
 
@@ -498,6 +575,11 @@ AI 上下文与实验校验、状态持久化（含实验会话重启恢复）�
 
 - **后端：** Python、FastAPI、psutil、filelock、httpx（AI 接入）
 - **前端：** React 19 + Mantine 9 + TypeScript（Vite 构建）；旧版原生 JS 界面保留于 /legacy
+- **Agent：** Node.js sidecar + `@earendil-works/pi-agent-core`（`agent_node/`，
+  由后端按需拉起，只监听 127.0.0.1；工具实现留在 Python）
+- **eNSP 注入：** C++ 32 位 DLL 注入 eNSP 客户端（`tools/ensp_control.cpp`，RPC 端口 18800）。
+  依赖硬编码偏移，**必须与 eNSP 版本严格匹配**；需用 32 位 TDM-GCC 重新编译
+  （命令见 `.cpp` 文件头）；`*.dll` 是编译产物，已 gitignore，不入库
 - **数据存储：** JSON 文件 + filelock + 内存缓存
 - **AI：** OpenAI 兼容协议，模型服务自行接入
 - **设计特性：** 玻璃态 UI、三模式主题、能力证据徽标、填空式配置

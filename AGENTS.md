@@ -60,9 +60,10 @@ cd ..
 main.py            FastAPI 装配（挂载路由与静态资源，无领域逻辑）
 app/               基础设施：config / state / models / instance_lock / desktop
 domain/            领域逻辑：workspace / ensp_runtime / console_connection / collect / parse ...
-routes_*.py        HTTP 薄层：system / devices / capabilities / ai / config / scripts
-services/          内聚服务：ai_assistant / capability_* / config_builder / command_catalog ...
+routes_*.py        HTTP 薄层：system / devices / capabilities / ai / agent / config / scripts
+services/          内聚服务：ai_assistant / agent_sidecar / agent_tools / capability_* / config_builder ...
 frontend/          React 19 + Mantine 9 + TS（src/views, src/components, src/lib, src/__tests__）
+agent_node/        Agent 引擎（Node sidecar：server / tool-bridge / provider，由后端按需拉起）
 static/            旧版原生 JS 界面（/legacy，已冻结，仅修致命问题）
 tests/             离线单元测试（testpaths = tests）
 tools/             连真机的运维脚本 + eNSP 注入控制 DLL
@@ -169,8 +170,8 @@ python -m pytest
 
 ## 七、已知脱节项（改文档前先核对代码）
 
-- `README.md`「访问安全」整章**已失效**：`services/access_guard.py` 已删除，
-  `main.py` 无访问令牌中间件。
-- `domain/topology.py` 已由 `domain/workspace.py` 接管；README 结构树中
-  `device_store.py` 重复两行。
+- `main.py` 仍**没有访问令牌中间件**，`services/access_guard.py` 不存在。
+  所有 `/api/*` 本机可直接访问；CORS 已收窄为回环白名单（127.0.0.1/localhost 的
+  8000 与 8160），但那只是纵深防御，**不等于鉴权**。真正的安全边界是下发确认闸门。
+- `static/` 已冻结（仅修致命问题），新增功能一律进 `frontend/`。
 - 修改 README 或文档时，以实际代码路径与行为为准，不要照抄旧描述。
