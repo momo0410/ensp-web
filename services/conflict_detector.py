@@ -65,16 +65,14 @@ def extract_ip_from_command(cmd: str) -> str:
 
 
 def extract_interface_from_command(cmd: str) -> str:
-    """从命令中提取接口名。"""
-    patterns = [
-        r'interface\s+(GE|GigabitEthernet|Eth-Trunk|Vlanif|Loopback|ME|XGE|TengigabitEthernet)\S+',
-        r'interface\s+(\S+)',
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, cmd, re.IGNORECASE)
-        if match:
-            return match.group(1) if match.lastindex else match.group(0)
-    return ""
+    """从命令中提取完整接口名（如 GE0/0/1、GigabitEthernet0/0/1、Vlanif10）。
+
+    注意必须返回**完整**接口名：`check_interface_has_ip` 是按接口名整体比对
+    配置段的，只取前缀（早先的写法会把 GigabitEthernet0/0/1 截成
+    GigabitEthernet）会让"接口已有 IP"的检查永远匹配不上、静默失效。
+    """
+    match = re.search(r"\binterface\s+([A-Za-z][\w\-/.:]*)", cmd, re.IGNORECASE)
+    return match.group(1) if match else ""
 
 
 def extract_vlan_id(cmd: str) -> str:
