@@ -22,12 +22,18 @@ from app.state import _lab_sessions, state
 from domain.device_store import load_devices
 from services import state_persist
 
-app = FastAPI(title="eNSP Web 管理系统", version="2.0.0")
+app = FastAPI(title="eNSP Web 管理系统", version=APP_VERSION)
 
-# 允许从本地 HTML 直接打开页面时访问后端接口。
+# 前端由本进程同源托管（app/desktop.py:PORT=8000），开发期走 vite 代理（8160），
+# 因此只放行本机来源即可，无需通配来源。
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://127.0.0.1:8000",
+        "http://localhost:8000",
+        "http://127.0.0.1:8160",
+        "http://localhost:8160",
+    ],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -110,12 +116,19 @@ async def startup_event():
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """退出时清理 Agent sidecar 子进程，避免留下孤儿 Node 进程。"""
+    """退出时先清理 Agent sidecar 子进程，再释放单实例锁。
+
+    两步各自兜异常：sidecar 清理失败不能连带把锁留在文件系统里。
+    """
     try:
         from services.agent_sidecar import sidecar
         sidecar.stop()
     except Exception as e:
         logger.warning("清理 Agent sidecar 失败: %s", e)
+    try:
+        release_single_instance_lock()
+    except Exception as e:
+        logger.warning("释放单实例锁失败: %s", e)
 
 
 def _silent_collect_missing() -> None:
@@ -166,12 +179,6 @@ def _silent_collect_missing() -> None:
         # 让出 CPU 与 Console 通道，前台请求不至于排在本批后面干等
         time.sleep(1.5)
     logger.info("静默采集完成：%d/%d 台成功", ok, len(targets))
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """退出时释放单实例锁。"""
-    release_single_instance_lock()
 
 
 def _auto_launch_ensp() -> None:
