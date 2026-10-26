@@ -394,26 +394,22 @@ async def ai_lab_hint(session_id: str, req: AiLabHintRequest):
 #
 # 安全红线：AI 绝不直接下发。它只能产出受 schema 约束的 JSON plan，
 # 这里校验通过后交给前端预览，由人点确认后才走既有下发链路。
+#
+# 系统提示词统一定义在 services/ai_plan.py（PLAN_SYSTEM）：路由、Agent 工具、
+# 一键刷配置三处共用同一份口径，也避免 services 反向 import 路由层。
 # ---------------------------------------------------------------------------
-_PLAN_SYSTEM = """你是一个网络配置助手。根据用户要求和设备上下文，输出一份**JSON plan**，
-且只能输出一个 ```json 代码块，不要有多余文字。
-
-两种 plan：
-1. 配置下发：{"kind":"config","targets":["设备IP",...],"commands":["ospf 1 router-id 1.1.1.1"," area 0"],"verify":["display ospf brief"],"save":false}
-   需要批量递增时加 series：{"kind":"config","targets":[...],"commands":["ospf 1 router-id {{router_id}}"],"series":{"base":{"router_id":"192.168.1.{i}"},"start":1,"step":1}}
-2. 拓扑搭建：{"kind":"topology","name":"拓扑名","devices":[{"name":"R1","model":"Router"}],"links":[{"a":{"device":"R1","interface":"GE0/0/0"},"b":{"device":"R2","interface":"GE0/0/0"}}],"auto_start":false}
-
-硬性要求：
-- targets 必须是设备表中真实存在的 IP；型号必须在支持列表内。
-- 命令逐条写成 VRP（华为）语法，不要 Cisco 语法。
-- 不要输出自然语言解释，不要输出第二个 JSON。
-"""
 
 
 @router.post("/api/ai/plan")
 async def ai_create_plan(req: AiPlanRequest):
     """让 AI 产出结构化 plan 并校验；不执行任何下发。"""
-    from services.ai_plan import PlanError, extract_plan, render_plan_summary, validate_plan
+    from services.ai_plan import (
+        PLAN_SYSTEM,
+        PlanError,
+        extract_plan,
+        render_plan_summary,
+        validate_plan,
+    )
 
     devices = load_devices()
     known_ips = [d.get("ip") for d in devices if d.get("ip")]
@@ -429,7 +425,7 @@ async def ai_create_plan(req: AiPlanRequest):
                 context = ai_assistant.render_device_context(dev, state.get("capability_results", {}).get(req.device_ip))
         messages = ai_assistant.build_messages(
             req.message, [], device_context=context, task="free",
-            extra_context=_PLAN_SYSTEM,
+            extra_context=PLAN_SYSTEM,
         )
         try:
             reply = ai_assistant.chat_once(messages)

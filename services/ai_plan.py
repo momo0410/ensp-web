@@ -50,6 +50,23 @@ _IFACE_RE = re.compile(r"^[A-Za-z]{1,12}\d+(/\d+){0,3}$")
 
 PLAN_KINDS = ("config", "topology")
 
+# 让模型产出受约束 plan 的系统提示词。定义在服务层（而非路由层），
+# 因为「路由产出 plan」「Agent 工具产出 plan」「一键刷配置产出 plan」
+# 三处必须共用同一份口径，services 不允许反向依赖 routes。
+PLAN_SYSTEM = """你是一个网络配置助手。根据用户要求和设备上下文，输出一份**JSON plan**，
+且只能输出一个 ```json 代码块，不要有多余文字。
+
+两种 plan：
+1. 配置下发：{"kind":"config","targets":["设备IP",...],"commands":["ospf 1 router-id 1.1.1.1"," area 0"],"verify":["display ospf brief"],"save":false}
+   需要批量递增时加 series：{"kind":"config","targets":[...],"commands":["ospf 1 router-id {{router_id}}"],"series":{"base":{"router_id":"192.168.1.{i}"},"start":1,"step":1}}
+2. 拓扑搭建：{"kind":"topology","name":"拓扑名","devices":[{"name":"R1","model":"Router"}],"links":[{"a":{"device":"R1","interface":"GE0/0/0"},"b":{"device":"R2","interface":"GE0/0/0"}}],"auto_start":false}
+
+硬性要求：
+- targets 必须是设备表中真实存在的 IP；型号必须在支持列表内。
+- 命令逐条写成 VRP（华为）语法，不要 Cisco 语法。
+- 不要输出自然语言解释，不要输出第二个 JSON。
+"""
+
 
 class PlanError(ValueError):
     """AI 输出的 plan 不合法。"""

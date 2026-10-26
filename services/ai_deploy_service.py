@@ -130,11 +130,11 @@ def generate_plan(instruction: str, devices: List[dict],
             context = ai_assistant.render_device_context(
                 dev, (capability_results or {}).get(device_ip))
 
-    # 复用路由层同一份系统提示词，保证「生成」与「校验」的口径一致
-    from routes_ai import _PLAN_SYSTEM
+    # 与路由层 / Agent 工具共用同一份系统提示词，保证「生成」与「校验」口径一致
+    from services.ai_plan import PLAN_SYSTEM
 
     messages = ai_assistant.build_messages(
-        prompt, [], device_context=context, task="free", extra_context=_PLAN_SYSTEM)
+        prompt, [], device_context=context, task="free", extra_context=PLAN_SYSTEM)
 
     try:
         reply = chat_fn(messages) if chat_fn else ai_assistant.chat_once(messages)

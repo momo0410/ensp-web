@@ -452,8 +452,13 @@ def _t_propose_config(args: Dict[str, Any], ctx: AgentContext) -> Dict[str, Any]
 )
 def _t_propose_topology(args: Dict[str, Any], ctx: AgentContext) -> Dict[str, Any]:
     from services import ai_assistant
-    from services.ai_plan import PlanError, extract_plan, render_plan_summary, validate_plan
-    from routes_ai import _PLAN_SYSTEM
+    from services.ai_plan import (
+        PLAN_SYSTEM,
+        PlanError,
+        extract_plan,
+        render_plan_summary,
+        validate_plan,
+    )
 
     instruction = str(args.get("instruction") or "").strip()
     if not instruction:
