@@ -34,3 +34,5 @@ agent_node/node_modules/
 pytest-of-*/
 tools/*.dll
 *.lock
+
+.shot/
